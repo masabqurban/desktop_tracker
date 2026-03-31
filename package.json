@@ -1,0 +1,59 @@
+{
+  "name": "employee-desktop-tracker",
+  "version": "1.0.0",
+  "description": "Cross-platform employee activity tracker with Electron and React",
+  "main": "electron/main.js",
+  "author": "Masab Qurban",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "concurrently \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "start": "electron .",
+    "build": "vite build",
+    "dist": "npm run build && electron-builder -mwl"
+  },
+  "dependencies": {
+    "active-win": "^8.1.0",
+    "axios": "^1.8.4",
+    "cors": "^2.8.5",
+    "electron-log": "^5.2.4",
+    "express": "^4.21.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "uiohook-napi": "^1.5.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.4.1",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3",
+    "vite": "^5.4.12",
+    "wait-on": "^8.0.2"
+  },
+  "build": {
+    "appId": "com.masabqurban.employee.desktop.tracker",
+    "productName": "Employee Desktop Tracker",
+    "files": [
+      "electron/**/*",
+      "dist/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "build"
+    },
+    "mac": {
+      "category": "public.app-category.business"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
+  }
+}
