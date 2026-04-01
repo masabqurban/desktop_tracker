@@ -8,6 +8,7 @@ class TrackerService {
   constructor({ dataStore, onUpdate }) {
     this.dataStore = dataStore;
     this.onUpdate = onUpdate;
+    this.isTrackingEnabled = true; // Will be set based on office hours
     this.timer = null;
     this.currentWindow = null;
     this.lastTickAt = null;
@@ -125,6 +126,23 @@ class TrackerService {
         resolution: `${imageSize.width}x${imageSize.height}`
       });
 
+      const authSession = this.dataStore.getAuthSession();
+      const employeeId = authSession?.employee?.id || "unknown";
+      this.dataStore.queueForSync({
+        target: "screenshot",
+        endpoint: DEFAULTS.erpScreenshotEndpoint,
+        payload: {
+          filePath: filepath,
+          generatedAt: timestamp,
+          deviceId: `desktop-${employeeId}`,
+          idleMs: idleCaptureMs,
+          displayId: sourceDisplayId,
+          displayLabel: matchedDisplay?.label || selectedSource.name || `Display ${sourceDisplayId}`,
+          resolution: `${imageSize.width}x${imageSize.height}`
+        }
+      });
+      this.dataStore.persist();
+
       this.dataStore.addDesktopEvent({
         type: "idle_screenshot",
         screenshotPath: filepath,
@@ -174,10 +192,74 @@ class TrackerService {
     }
   }
 
+  isWithinOfficeHours() {
+    const session = this.dataStore.getAuthSession();
+    if (!session?.isAuthenticated || !session?.employee) {
+      // If not authenticated, allow tracking
+      return true;
+    }
+
+    const employee = session.employee;
+    if (employee.isOnBreak) {
+      return false;
+    }
+    const officeInStr = employee.officeIn;
+    const officeOutStr = employee.officeOut;
+
+    if (!officeInStr || !officeOutStr) {
+      // If office hours not set, allow tracking
+      return true;
+    }
+
+    try {
+      const now = new Date();
+      const [inHour, inMin] = officeInStr.split(":").map(Number);
+      const [outHour, outMin] = officeOutStr.split(":").map(Number);
+
+      const officeIn = new Date();
+      officeIn.setHours(inHour, inMin, 0, 0);
+
+      const officeOut = new Date();
+      officeOut.setHours(outHour, outMin, 0, 0);
+
+      // Handle case where office out is next day (e.g., 9:00 to 17:00 assumed same day, but 10:00 to 2:00 crosses midnight)
+      if (officeOut < officeIn) {
+        officeOut.setDate(officeOut.getDate() + 1);
+      }
+
+      return now >= officeIn && now < officeOut;
+    } catch {
+      // If parsing fails, allow tracking
+      return true;
+    }
+  }
+
   async poll() {
     const now = Date.now();
     const deltaMs = Math.max(0, now - (this.lastTickAt || now));
     this.lastTickAt = now;
+
+    // Check if currently within office hours
+    const wasTrackingEnabled = this.isTrackingEnabled;
+    this.isTrackingEnabled = this.isWithinOfficeHours();
+
+    // If office hours ended, finalize current window and stop tracking
+    if (wasTrackingEnabled && !this.isTrackingEnabled) {
+      await this.finalizeCurrentWindow("office_hours_ended");
+      this.currentWindow = null;
+      return;
+    }
+
+    // If office hours started, do not record activity before this moment
+    if (!wasTrackingEnabled && this.isTrackingEnabled) {
+      this.lastActivityAt = now; // Reset activity timestamp
+      return;
+    }
+
+    // If outside office hours, don't track anything
+    if (!this.isTrackingEnabled) {
+      return;
+    }
 
     const idleSeconds = powerMonitor.getSystemIdleTime();
     const timeSinceActivity = now - this.lastActivityAt;
@@ -284,7 +366,8 @@ class TrackerService {
       this.onUpdate({
         timestamp: now,
         activeWindow: this.currentWindow,
-        idle: this.idle
+        idle: this.idle,
+        isTrackingEnabled: this.isTrackingEnabled
       });
     }
   }

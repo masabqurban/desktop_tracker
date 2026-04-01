@@ -6,8 +6,10 @@ const DEFAULTS = {
   localApiPort: 3002,
   maxTimelineEvents: 20000,
   syncIntervalMs: 60000,
-  erpDesktopEndpoint: process.env.ERP_DESKTOP_ENDPOINT || "http://localhost:8000/api/desktop-activity",
-  erpBrowserEndpoint: process.env.ERP_BROWSER_ENDPOINT || "http://localhost:8000/api/browser-activity",
+  erpBaseUrl: process.env.ERP_BASE_URL || "http://127.0.0.1:8000",
+  erpDesktopEndpoint: process.env.ERP_DESKTOP_ENDPOINT || "http://127.0.0.1:8000/api/admin/tracker/desktop-activity",
+  erpBrowserEndpoint: process.env.ERP_BROWSER_ENDPOINT || "http://127.0.0.1:8000/api/admin/tracker/browser-activity",
+  erpScreenshotEndpoint: process.env.ERP_SCREENSHOT_ENDPOINT || "http://127.0.0.1:8000/api/admin/tracker/screenshot",
   erpAuthToken: process.env.ERP_AUTH_TOKEN || "",
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
 };

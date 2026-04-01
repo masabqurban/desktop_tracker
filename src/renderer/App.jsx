@@ -80,6 +80,10 @@ function App() {
   const [browserVisibleCount, setBrowserVisibleCount] = useState(PAGE_SIZE);
   const [desktopVisibleCount, setDesktopVisibleCount] = useState(PAGE_SIZE);
   const [screenshotPage, setScreenshotPage] = useState(1);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
 
   const loadDashboard = async () => {
     const data = await window.trackerApi.getDashboard();
@@ -94,13 +98,23 @@ function App() {
       loadDashboard();
     });
 
-    const timer = setInterval(() => {
+    const dashboardTimer = setInterval(() => {
       loadDashboard();
     }, 15000);
 
+    // Refresh employee profile every 5 minutes to keep office hours updated
+    const profileRefreshTimer = setInterval(async () => {
+      const session = await window.trackerApi.getSession();
+      if (session?.isAuthenticated) {
+        await window.trackerApi.refreshSession();
+        await loadDashboard();
+      }
+    }, 5 * 60 * 1000);
+
     return () => {
       unsubscribe();
-      clearInterval(timer);
+      clearInterval(dashboardTimer);
+      clearInterval(profileRefreshTimer);
     };
   }, []);
 
@@ -175,6 +189,48 @@ function App() {
     setSyncing(false);
   };
 
+  const onLogin = async (event) => {
+    event.preventDefault();
+    if (!email || !password) {
+      setAuthError("Email and password are required");
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthError("");
+    const response = await window.trackerApi.login({ email, password });
+    if (!response?.ok) {
+      setAuthError(response?.error || "Login failed");
+    } else {
+      setPassword("");
+      await loadDashboard();
+    }
+    setAuthLoading(false);
+  };
+
+  const onLogout = async () => {
+    setAuthLoading(true);
+    setAuthError("");
+    await window.trackerApi.logout();
+    await loadDashboard();
+    setAuthLoading(false);
+  };
+
+  const onRefreshProfile = async () => {
+    setAuthLoading(true);
+    setAuthError("");
+    const response = await window.trackerApi.refreshSession();
+    if (!response?.ok) {
+      setAuthError(response?.error || "Failed to refresh profile");
+    }
+    await loadDashboard();
+    setAuthLoading(false);
+  };
+
+  const onOpenErpLogin = async () => {
+    await window.trackerApi.openErpLogin();
+  };
+
   const onOpenScreenshot = async (screenshotPath) => {
     if (!screenshotPath) {
       return;
@@ -192,6 +248,37 @@ function App() {
 
   // Use installedBrowsers as source of truth for what exists on this system.
   const installedMap = dashboard.installedBrowsers || {};
+  const auth = dashboard.auth || {};
+  const employee = auth.employee || null;
+  const isAuthenticated = Boolean(auth.isAuthenticated && auth.token);
+
+  // Check if current time is within office hours
+  const isWithinOfficeHours = (() => {
+    if (!employee?.officeIn || !employee?.officeOut) {
+      return true; // If no office hours set, consider tracking always active
+    }
+
+    try {
+      const now = new Date();
+      const [inHour, inMin] = employee.officeIn.split(":").map(Number);
+      const [outHour, outMin] = employee.officeOut.split(":").map(Number);
+
+      const officeIn = new Date();
+      officeIn.setHours(inHour, inMin, 0, 0);
+
+      const officeOut = new Date();
+      officeOut.setHours(outHour, outMin, 0, 0);
+
+      // Handle case where office out is next day
+      if (officeOut < officeIn) {
+        officeOut.setDate(officeOut.getDate() + 1);
+      }
+
+      return now >= officeIn && now < officeOut;
+    } catch {
+      return true;
+    }
+  })();
   const allBrowsers = Object.entries(installedMap)
     .filter(([, info]) => Boolean(info?.installed))
     .map(([name, info]) => {
@@ -215,7 +302,7 @@ function App() {
         </div>
         <div className="hero-actions">
           <button onClick={loadDashboard}>Refresh</button>
-          <button onClick={onSyncNow} disabled={syncing}>
+          <button onClick={onSyncNow} disabled={syncing || !isAuthenticated}>
             {syncing ? "Syncing..." : "Sync to ERP"}
           </button>
         </div>
@@ -237,6 +324,66 @@ function App() {
           </button>
         </div>
         <div className="updated-pill">Last updated: {lastUpdated}</div>
+      </section>
+
+      <section className="card auth-card">
+        <div className="auth-header">
+          <h2>Employee Authentication</h2>
+          <span className={`auth-pill ${isAuthenticated ? "ok" : "warn"}`}>
+            {isAuthenticated ? "Linked" : "Not Linked"}
+          </span>
+        </div>
+
+        {!isAuthenticated && (
+          <form className="auth-form" onSubmit={onLogin}>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Employee email"
+              autoComplete="username"
+            />
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password"
+              autoComplete="current-password"
+            />
+            <div className="auth-actions">
+              <button type="submit" disabled={authLoading}>{authLoading ? "Signing in..." : "Sign In"}</button>
+              <button type="button" className="secondary-btn" onClick={onOpenErpLogin}>Open ERP Login</button>
+            </div>
+          </form>
+        )}
+
+        {isAuthenticated && (
+          <div className="auth-profile">
+            <p><strong>Name:</strong> {employee?.name || "-"}</p>
+            <p><strong>Email:</strong> {employee?.email || "-"}</p>
+            <p><strong>Designation:</strong> {employee?.designation || "-"}</p>
+            <p><strong>Office In:</strong> {employee?.officeIn || "-"}</p>
+            <p><strong>Office Out:</strong> {employee?.officeOut || "-"}</p>
+            {employee?.officeIn && employee?.officeOut && (
+              <p className="office-hours-status">
+                <strong>Status:</strong>
+                <span className={`status-badge ${isWithinOfficeHours ? 'active' : 'inactive'}`}>
+                  {isWithinOfficeHours ? '🟢 Tracking Active' : '🔴 Outside Office Hours'}
+                </span>
+              </p>
+            )}
+            <div className="auth-actions">
+              <button type="button" onClick={onRefreshProfile} disabled={authLoading}>
+                {authLoading ? "Refreshing..." : "Refresh Employee Info"}
+              </button>
+              <button type="button" className="secondary-btn" onClick={onLogout} disabled={authLoading}>
+                Logout
+              </button>
+            </div>
+          </div>
+        )}
+
+        {authError ? <p className="auth-error">{authError}</p> : null}
       </section>
 
       {activeTab === "extension" && (

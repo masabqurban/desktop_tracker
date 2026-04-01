@@ -230,6 +230,14 @@ function createDashboardPayload(data) {
 
   return {
     generatedAt: Date.now(),
+    auth: data.auth || {
+      isAuthenticated: false,
+      token: "",
+      userType: "Employee",
+      employee: null,
+      loginAt: null,
+      lastProfileRefreshAt: null
+    },
     totals: {
       totalTrackedMs: Object.values(data.appUsageMs || {}).reduce((sum, value) => sum + value, 0),
       totalIdleMs: Object.values(data.daily || {}).reduce((sum, day) => sum + (day.idleMs || 0), 0),

@@ -53,6 +53,14 @@ const INITIAL_DATA = {
     normal: 0
   },
   screenshots: [],
+  auth: {
+    isAuthenticated: false,
+    token: "",
+    userType: "Employee",
+    employee: null,
+    loginAt: null,
+    lastProfileRefreshAt: null
+  },
   idleStartTime: null,
   lastSnapshotAt: null,
   lastSyncAt: null,
@@ -348,6 +356,44 @@ class DataStore {
     if (this.data.screenshots.length > 100) {
       this.data.screenshots = this.data.screenshots.slice(-100);
     }
+  }
+
+  setAuthSession({ token, userType = "Employee", employee = null }) {
+    this.data.auth = {
+      isAuthenticated: Boolean(token),
+      token: token || "",
+      userType,
+      employee,
+      loginAt: Date.now(),
+      lastProfileRefreshAt: Date.now()
+    };
+  }
+
+  updateAuthEmployee(employee) {
+    const current = this.data.auth || {};
+    this.data.auth = {
+      isAuthenticated: Boolean(current.token),
+      token: current.token || "",
+      userType: current.userType || "Employee",
+      employee: employee || current.employee || null,
+      loginAt: current.loginAt || Date.now(),
+      lastProfileRefreshAt: Date.now()
+    };
+  }
+
+  clearAuthSession() {
+    this.data.auth = {
+      isAuthenticated: false,
+      token: "",
+      userType: "Employee",
+      employee: null,
+      loginAt: null,
+      lastProfileRefreshAt: null
+    };
+  }
+
+  getAuthSession() {
+    return { ...(this.data.auth || {}) };
   }
 }
 

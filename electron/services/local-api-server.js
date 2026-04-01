@@ -95,6 +95,54 @@ class LocalApiServer {
       res.json(result);
     });
 
+    this.app.get("/api/office-hours-status", (_req, res) => {
+      const snapshot = this.dataStore.getSnapshot();
+      const session = snapshot.auth || {};
+      const employee = session.employee || null;
+      const isAuthenticated = Boolean(session.isAuthenticated && session.token);
+      const isOnBreak = Boolean(employee?.isOnBreak);
+
+      // Check if current time is within office hours
+      let isWithinOfficeHours = true; // Default: allow tracking
+      if (isOnBreak) {
+        isWithinOfficeHours = false;
+      } else if (isAuthenticated && employee?.officeIn && employee?.officeOut) {
+        try {
+          const now = new Date();
+          const [inHour, inMin] = employee.officeIn.split(":").map(Number);
+          const [outHour, outMin] = employee.officeOut.split(":").map(Number);
+
+          const officeIn = new Date();
+          officeIn.setHours(inHour, inMin, 0, 0);
+
+          const officeOut = new Date();
+          officeOut.setHours(outHour, outMin, 0, 0);
+
+          // Handle case where office out is next day
+          if (officeOut < officeIn) {
+            officeOut.setDate(officeOut.getDate() + 1);
+          }
+
+          isWithinOfficeHours = now >= officeIn && now < officeOut;
+        } catch {
+          isWithinOfficeHours = true;
+        }
+      }
+
+      res.json({
+        ok: true,
+        isAuthenticated,
+        isWithinOfficeHours,
+        isOnBreak,
+        employee: employee ? {
+          id: employee.id,
+          name: employee.name,
+          officeIn: employee.officeIn,
+          officeOut: employee.officeOut
+        } : null
+      });
+    });
+
     this.server = this.app.listen(port);
   }
 

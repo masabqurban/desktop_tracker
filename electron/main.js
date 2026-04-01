@@ -7,6 +7,8 @@ const { DataStore } = require("./services/data-store");
 const { TrackerService } = require("./services/tracker-service");
 const { LocalApiServer } = require("./services/local-api-server");
 const { SyncService } = require("./services/sync-service");
+const { AuthService } = require("./services/auth-service");
+const { DEFAULTS } = require("./services/config");
 const { createDashboardPayload } = require("./services/report-service");
 
 let mainWindow;
@@ -14,6 +16,7 @@ let dataStore;
 let trackerService;
 let localApiServer;
 let syncService;
+let authService;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -46,6 +49,14 @@ async function bootstrapServices() {
     dataStore,
     getDashboardPayload: () => createDashboardPayload(dataStore.getSnapshot())
   });
+
+  authService = new AuthService({
+    dataStore,
+    erpBaseUrl: DEFAULTS.erpBaseUrl
+  });
+
+  // Validate stored auth token on startup (in case token expired while app was closed)
+  await authService.validateStoredAuthToken();
 
   localApiServer = new LocalApiServer({
     dataStore,
@@ -110,6 +121,40 @@ function registerIpc() {
     }
 
     return { ok: true };
+  });
+
+  ipcMain.handle("tracker:auth-login", async (_event, payload) => {
+    try {
+      const session = await authService.login(payload || {});
+      syncService.queueDesktopSnapshot("auth_login");
+      return { ok: true, session };
+    } catch (error) {
+      return { ok: false, error: error?.response?.data?.message || error?.message || "Login failed" };
+    }
+  });
+
+  ipcMain.handle("tracker:auth-logout", async () => {
+    const session = await authService.logout();
+    return { ok: true, session };
+  });
+
+  ipcMain.handle("tracker:auth-session", async () => {
+    return { ok: true, session: authService.getSession() };
+  });
+
+  ipcMain.handle("tracker:auth-refresh", async () => {
+    try {
+      const session = await authService.refreshEmployeeProfile();
+      return { ok: true, session };
+    } catch (error) {
+      return { ok: false, error: error?.response?.data?.message || error?.message || "Profile refresh failed" };
+    }
+  });
+
+  ipcMain.handle("tracker:open-erp-login", async () => {
+    const loginUrl = `${DEFAULTS.erpBaseUrl.replace(/\/+$/, "")}/`;
+    await shell.openExternal(loginUrl);
+    return { ok: true, url: loginUrl };
   });
 }
 
