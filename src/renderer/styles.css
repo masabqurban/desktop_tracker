@@ -295,6 +295,62 @@ button:disabled {
   font-size: 20px;
 }
 
+.screenshots-section {
+  padding: 16px;
+}
+
+.screenshots-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.screenshots-header h2 {
+  margin: 0;
+}
+
+.screenshots-pagination {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.page-btn {
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.screenshots-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 12px;
+}
+
+.screenshot-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+  padding: 12px;
+}
+
+.screenshot-card .timestamp {
+  margin: 0 0 10px;
+  font-weight: 600;
+}
+
+.idle-info {
+  margin: 0 0 10px;
+  color: var(--muted);
+}
+
+.screenshot-link {
+  margin-top: 2px;
+}
+
 @media (max-width: 980px) {
   .metrics-grid,
   .status-grid,
@@ -316,6 +372,11 @@ button:disabled {
   }
 
   .hero {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .screenshots-header {
     flex-direction: column;
     align-items: flex-start;
   }

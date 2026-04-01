@@ -12,7 +12,7 @@
     "dist": "npm run build && electron-builder -mwl"
   },
   "dependencies": {
-    "active-win": "^8.1.0",
+    "active-win": "^9.0.0",
     "axios": "^1.8.4",
     "cors": "^2.8.5",
     "electron-log": "^5.2.4",
@@ -25,9 +25,9 @@
     "@vitejs/plugin-react": "^4.4.1",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
-    "electron": "^30.5.1",
-    "electron-builder": "^24.13.3",
-    "vite": "^5.4.12",
+    "electron": "^41.1.0",
+    "electron-builder": "^26.8.1",
+    "vite": "^8.0.3",
     "wait-on": "^8.0.2"
   },
   "build": {

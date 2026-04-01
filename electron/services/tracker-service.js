@@ -1,7 +1,7 @@
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const { powerMonitor, desktopCapturer } = require("electron");
+const { powerMonitor, desktopCapturer, screen } = require("electron");
 const { DEFAULTS } = require("./config");
 
 class TrackerService {
@@ -17,6 +17,8 @@ class TrackerService {
     this.activeWinFn = null;
     this.uiohook = null;
     this.hooksReady = false;
+    this.activeWinAvailable = false;
+    this.activeWinWarningLogged = false;
     this.lastActivityAt = Date.now();
     this.idleTimeout = 60000; // 60 seconds of no input = idle
     this.idleStartTime = null;
@@ -57,41 +59,103 @@ class TrackerService {
 
   async captureIdleScreenshot(timestamp) {
     try {
-      const sources = await desktopCapturer.getSources({ types: ["screen"] });
+      const idleCaptureMs = 60000;
+      const displays = screen.getAllDisplays();
+      if (displays.length === 0) {
+        return;
+      }
+
+      const maxWidth = Math.max(
+        1920,
+        ...displays.map((display) => Math.round((display.size?.width || 0) * (display.scaleFactor || 1)))
+      );
+      const maxHeight = Math.max(
+        1080,
+        ...displays.map((display) => Math.round((display.size?.height || 0) * (display.scaleFactor || 1)))
+      );
+
+      const sources = await desktopCapturer.getSources({
+        types: ["screen"],
+        thumbnailSize: {
+          width: maxWidth,
+          height: maxHeight
+        }
+      });
       if (sources.length === 0) {
         return;
       }
 
-      const source = sources[0];
-      const thumbnail = source.thumbnail;
-      if (!thumbnail) {
+      const activeDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+      const activeId = String(activeDisplay?.id || "");
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const pickByDisplay = (displayId) =>
+        sources.find((item) => String(item.display_id) === String(displayId) && !item.thumbnail.isEmpty());
+
+      const selectedSource =
+        pickByDisplay(activeId) ||
+        pickByDisplay(primaryDisplay?.id) ||
+        sources.find((item) => !item.thumbnail.isEmpty()) ||
+        null;
+
+      if (!selectedSource) {
+        this.dataStore.addDesktopEvent({
+          type: "idle_screenshot_skipped",
+          timestamp,
+          reason: "no_capturable_sources",
+          displayCount: displays.length,
+          sourceCount: sources.length,
+          appName: this.currentWindow?.appName || "idle"
+        });
         return;
       }
 
-      const filename = `idle-${timestamp}-${Math.random().toString(16).slice(2)}.png`;
+      const sourceDisplayId = selectedSource.display_id || activeId || String(primaryDisplay?.id || "unknown");
+      const matchedDisplay = displays.find((display) => String(display.id) === String(sourceDisplayId));
+      const thumbnail = selectedSource.thumbnail;
+      const imageSize = thumbnail.getSize();
+      const filename = `idle-${timestamp}-display-${sourceDisplayId}-${Math.random().toString(16).slice(2)}.png`;
       const filepath = path.join(this.screenshotDir, filename);
 
       fs.writeFileSync(filepath, thumbnail.toPNG());
 
-      this.dataStore.recordScreenshot(filepath, 300000);
+      this.dataStore.recordScreenshot(filepath, idleCaptureMs, {
+        displayId: sourceDisplayId,
+        isActiveDisplay: String(sourceDisplayId) === activeId,
+        displayLabel: matchedDisplay?.label || selectedSource.name || `Display ${sourceDisplayId}`,
+        resolution: `${imageSize.width}x${imageSize.height}`
+      });
+
       this.dataStore.addDesktopEvent({
         type: "idle_screenshot",
         screenshotPath: filepath,
         timestamp,
-        idleMinutes: 5,
+        idleMinutes: 1,
+        displayId: sourceDisplayId,
+        isActiveDisplay: String(sourceDisplayId) === activeId,
+        resolution: `${imageSize.width}x${imageSize.height}`,
         appName: this.currentWindow?.appName || "idle"
       });
     } catch (err) {
-      // Silently fail - screenshots are optional
+      this.dataStore.addDesktopEvent({
+        type: "idle_screenshot_error",
+        timestamp,
+        message: err?.message || "capture_failed",
+        appName: this.currentWindow?.appName || "idle"
+      });
     }
   }
 
   async prepareLibraries() {
     try {
       const activeWinModule = await import("active-win");
-      this.activeWinFn = activeWinModule.default;
+      this.activeWinFn =
+        activeWinModule.activeWindow ||
+        activeWinModule.default ||
+        null;
+      this.activeWinAvailable = typeof this.activeWinFn === "function";
     } catch {
       this.activeWinFn = null;
+      this.activeWinAvailable = false;
     }
 
     try {
@@ -120,6 +184,14 @@ class TrackerService {
     const currentlyIdle = timeSinceActivity >= this.idleTimeout || idleSeconds >= DEFAULTS.idleThresholdSeconds;
 
     const focused = await this.getActiveWindow();
+    if (!focused && !this.activeWinAvailable && !this.activeWinWarningLogged) {
+      this.activeWinWarningLogged = true;
+      this.dataStore.addDesktopEvent({
+        type: "active_window_unavailable",
+        timestamp: now,
+        appName: "system"
+      });
+    }
     if (focused && focused.appName) {
       this.dataStore.addOpenedApp(focused.appName, now);
     }
@@ -150,6 +222,11 @@ class TrackerService {
 
     if (this.currentWindow && deltaMs > 0) {
       this.dataStore.addAppUsage(this.currentWindow.appName, deltaMs, now, currentlyIdle);
+    } else if (!focused && deltaMs > 0) {
+      // Fallback: keep total tracked/idle time moving even when active window detection is unavailable.
+      const fallbackApp = "System Activity";
+      this.dataStore.addOpenedApp(fallbackApp, now);
+      this.dataStore.addAppUsage(fallbackApp, deltaMs, now, currentlyIdle);
     }
 
     if (this.keyboardDelta > 0) {
@@ -180,6 +257,8 @@ class TrackerService {
       this.idle = currentlyIdle;
       if (this.idle) {
         this.idleStartTime = now;
+        // Capture immediately when entering idle, then continue at the interval below.
+        await this.captureIdleScreenshot(now);
       } else {
         this.idleStartTime = null;
       }
@@ -192,10 +271,10 @@ class TrackerService {
       });
     }
 
-    // Capture screenshot when idle for 5 minutes
-    if (this.idle && this.idleStartTime && (now - this.idleStartTime >= 300000)) {
+    // Capture screenshot every 1 minute while still idle (testing)
+    if (this.idle && this.idleStartTime && (now - this.idleStartTime >= 60000)) {
       await this.captureIdleScreenshot(now);
-      this.idleStartTime = now; // Reset to capture again after next 5 minutes
+      this.idleStartTime = now; // Reset to capture again after next 1 minute
     }
 
     this.dataStore.touchSnapshot(now);

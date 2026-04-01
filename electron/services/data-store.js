@@ -334,12 +334,16 @@ class DataStore {
     };
   }
 
-  recordScreenshot(imagePath, idleMs) {
+  recordScreenshot(imagePath, idleMs, metadata = {}) {
     this.data.screenshots.push({
       timestamp: Date.now(),
       path: imagePath,
       idleMs,
-      appName: "system_idle"
+      appName: "system_idle",
+      displayId: metadata.displayId,
+      displayLabel: metadata.displayLabel,
+      isActiveDisplay: Boolean(metadata.isActiveDisplay),
+      resolution: metadata.resolution
     });
     if (this.data.screenshots.length > 100) {
       this.data.screenshots = this.data.screenshots.slice(-100);

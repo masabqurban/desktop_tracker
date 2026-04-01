@@ -72,12 +72,14 @@ function BarChartCard({ title, rows, valueLabelFormatter }) {
 
 function App() {
   const PAGE_SIZE = 15;
+  const SCREENSHOT_PAGE_SIZE = 3;
   const [dashboard, setDashboard] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState("-");
   const [activeTab, setActiveTab] = useState("system");
   const [browserVisibleCount, setBrowserVisibleCount] = useState(PAGE_SIZE);
   const [desktopVisibleCount, setDesktopVisibleCount] = useState(PAGE_SIZE);
+  const [screenshotPage, setScreenshotPage] = useState(1);
 
   const loadDashboard = async () => {
     const data = await window.trackerApi.getDashboard();
@@ -116,6 +118,19 @@ function App() {
     () => desktopEvents.slice(0, desktopVisibleCount),
     [desktopEvents, desktopVisibleCount]
   );
+
+  const totalScreenshotPages = Math.max(1, Math.ceil(screenshots.length / SCREENSHOT_PAGE_SIZE));
+  const safeScreenshotPage = Math.min(screenshotPage, totalScreenshotPages);
+  const visibleScreenshots = useMemo(() => {
+    const start = (safeScreenshotPage - 1) * SCREENSHOT_PAGE_SIZE;
+    return screenshots.slice(start, start + SCREENSHOT_PAGE_SIZE);
+  }, [screenshots, safeScreenshotPage]);
+
+  useEffect(() => {
+    if (screenshotPage > totalScreenshotPages) {
+      setScreenshotPage(totalScreenshotPages);
+    }
+  }, [screenshotPage, totalScreenshotPages]);
 
   const extensionPeriodRows = useMemo(
     () => [
@@ -158,6 +173,17 @@ function App() {
     await window.trackerApi.forceSync();
     await loadDashboard();
     setSyncing(false);
+  };
+
+  const onOpenScreenshot = async (screenshotPath) => {
+    if (!screenshotPath) {
+      return;
+    }
+
+    const result = await window.trackerApi.openScreenshot(screenshotPath);
+    if (!result?.ok) {
+      alert(result?.error || "Failed to open screenshot file");
+    }
   };
 
   if (!dashboard) {
@@ -392,17 +418,49 @@ function App() {
       )}
 
       {screenshots.length > 0 && (
-        <section className="screenshots-section">
-          <h2>Idle Activity Snapshots</h2>
+        <section className="screenshots-section card">
+          <div className="screenshots-header">
+            <h2>Idle Activity Snapshots</h2>
+            <div className="screenshots-pagination">
+              <button
+                type="button"
+                className="page-btn"
+                onClick={() => setScreenshotPage((prev) => Math.max(1, prev - 1))}
+                disabled={safeScreenshotPage === 1}
+              >
+                Previous
+              </button>
+              <span>
+                Page {safeScreenshotPage} of {totalScreenshotPages}
+              </span>
+              <button
+                type="button"
+                className="page-btn"
+                onClick={() => setScreenshotPage((prev) => Math.min(totalScreenshotPages, prev + 1))}
+                disabled={safeScreenshotPage === totalScreenshotPages}
+              >
+                Next
+              </button>
+            </div>
+          </div>
           <div className="screenshots-grid">
-            {screenshots.map((screenshot, index) => (
+            {visibleScreenshots.map((screenshot, index) => (
               <article key={index} className="screenshot-card">
                 <p className="timestamp">{new Date(screenshot.timestamp).toLocaleString()}</p>
                 <p className="idle-info">Idle for {Math.round((screenshot.idleMs || 0) / 60000)} min</p>
+                <p className="idle-info">
+                  Source: {screenshot.displayLabel || `Display ${screenshot.displayId || "Unknown"}`}
+                  {screenshot.isActiveDisplay ? " (Active)" : ""}
+                  {screenshot.resolution ? ` - ${screenshot.resolution}` : ""}
+                </p>
                 {screenshot.path && (
-                  <a href={screenshot.path} target="_blank" rel="noopener noreferrer" className="screenshot-link">
+                  <button
+                    type="button"
+                    onClick={() => onOpenScreenshot(screenshot.path)}
+                    className="screenshot-link"
+                  >
                     View Screenshot
-                  </a>
+                  </button>
                 )}
               </article>
             ))}

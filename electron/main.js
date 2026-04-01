@@ -1,5 +1,6 @@
 const path = require("path");
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const fs = require("fs");
 const log = require("electron-log");
 const { resolveRendererEntry } = require("./services/config");
 const { DataStore } = require("./services/data-store");
@@ -90,6 +91,24 @@ function registerIpc() {
 
   ipcMain.handle("tracker:queue-sync", async (_event, reason) => {
     syncService.queueDesktopSnapshot(reason || "manual");
+    return { ok: true };
+  });
+
+  ipcMain.handle("tracker:open-screenshot", async (_event, screenshotPath) => {
+    if (!screenshotPath || typeof screenshotPath !== "string") {
+      return { ok: false, error: "Invalid screenshot path" };
+    }
+
+    const normalizedPath = path.normalize(screenshotPath);
+    if (!fs.existsSync(normalizedPath)) {
+      return { ok: false, error: "Screenshot file not found" };
+    }
+
+    const openError = await shell.openPath(normalizedPath);
+    if (openError) {
+      return { ok: false, error: openError };
+    }
+
     return { ok: true };
   });
 }

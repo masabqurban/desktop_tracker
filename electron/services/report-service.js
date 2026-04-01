@@ -45,6 +45,151 @@ function buildRange(data, days) {
   return aggregateDailyEntries(selected);
 }
 
+function deriveExtensionDataFromEvents(data) {
+  const browserEvents = Array.isArray(data.browserEvents) ? data.browserEvents : [];
+  const now = Date.now();
+  const dayStart = new Date(now);
+  dayStart.setHours(0, 0, 0, 0);
+  const dailyStart = dayStart.getTime();
+  const weeklyStart = dailyStart - 6 * 24 * 60 * 60 * 1000;
+  const monthlyStart = dailyStart - 29 * 24 * 60 * 60 * 1000;
+
+  let totalTabMs = 0;
+  let totalIdleMs = 0;
+  const domainTotals = {};
+
+  const rangeState = {
+    daily: { tabMs: 0, idleMs: 0, eventCount: 0, domainTotals: {} },
+    weekly: { tabMs: 0, idleMs: 0, eventCount: 0, domainTotals: {} },
+    monthly: { tabMs: 0, idleMs: 0, eventCount: 0, domainTotals: {} }
+  };
+
+  const sortedIdle = browserEvents
+    .map((item) => item?.event || item)
+    .filter((event) => event?.type === "idle")
+    .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+  const addIdleForRange = (start, end) => {
+    let idleMs = 0;
+    let state = "active";
+    let cursor = start;
+
+    for (const event of sortedIdle) {
+      const t = event.timestamp || 0;
+      if (t < start) {
+        state = event.state || state;
+        continue;
+      }
+      if (t > end) {
+        break;
+      }
+
+      if ((state === "idle" || state === "locked") && t > cursor) {
+        idleMs += t - cursor;
+      }
+
+      cursor = Math.max(cursor, t);
+      state = event.state || state;
+    }
+
+    if ((state === "idle" || state === "locked") && end > cursor) {
+      idleMs += end - cursor;
+    }
+
+    return idleMs;
+  };
+
+  for (const wrapper of browserEvents) {
+    const event = wrapper?.event || wrapper;
+    const timestamp = event?.timestamp || wrapper?.timestamp || 0;
+    if (!timestamp) {
+      continue;
+    }
+
+    if (timestamp >= dailyStart) {
+      rangeState.daily.eventCount += 1;
+    }
+    if (timestamp >= weeklyStart) {
+      rangeState.weekly.eventCount += 1;
+    }
+    if (timestamp >= monthlyStart) {
+      rangeState.monthly.eventCount += 1;
+    }
+
+    if (event?.type !== "tab") {
+      continue;
+    }
+
+    const duration = Number(event.duration || 0);
+    if (duration <= 0) {
+      continue;
+    }
+
+    totalTabMs += duration;
+
+    let domain = "unknown";
+    try {
+      domain = new URL(event.url || "").hostname || "unknown";
+    } catch {
+      domain = "unknown";
+    }
+    domainTotals[domain] = (domainTotals[domain] || 0) + duration;
+
+    if (timestamp >= dailyStart) {
+      rangeState.daily.tabMs += duration;
+      rangeState.daily.domainTotals[domain] = (rangeState.daily.domainTotals[domain] || 0) + duration;
+    }
+    if (timestamp >= weeklyStart) {
+      rangeState.weekly.tabMs += duration;
+      rangeState.weekly.domainTotals[domain] = (rangeState.weekly.domainTotals[domain] || 0) + duration;
+    }
+    if (timestamp >= monthlyStart) {
+      rangeState.monthly.tabMs += duration;
+      rangeState.monthly.domainTotals[domain] = (rangeState.monthly.domainTotals[domain] || 0) + duration;
+    }
+  }
+
+  rangeState.daily.idleMs = addIdleForRange(dailyStart, now);
+  rangeState.weekly.idleMs = addIdleForRange(weeklyStart, now);
+  rangeState.monthly.idleMs = addIdleForRange(monthlyStart, now);
+  totalIdleMs = addIdleForRange(0, now);
+
+  const toTopDomains = (totals) =>
+    Object.entries(totals || {})
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([domain, durationMs]) => ({ domain, durationMs }));
+
+  const productivity = totalTabMs + totalIdleMs > 0
+    ? Math.round((totalTabMs / (totalTabMs + totalIdleMs)) * 100)
+    : 0;
+
+  return {
+    topDomains: toTopDomains(domainTotals),
+    totalTabMs,
+    totalIdleMs,
+    daily: {
+      tabMs: rangeState.daily.tabMs,
+      idleMs: rangeState.daily.idleMs,
+      eventCount: rangeState.daily.eventCount,
+      topDomains: toTopDomains(rangeState.daily.domainTotals)
+    },
+    weekly: {
+      tabMs: rangeState.weekly.tabMs,
+      idleMs: rangeState.weekly.idleMs,
+      eventCount: rangeState.weekly.eventCount,
+      topDomains: toTopDomains(rangeState.weekly.domainTotals)
+    },
+    monthly: {
+      tabMs: rangeState.monthly.tabMs,
+      idleMs: rangeState.monthly.idleMs,
+      eventCount: rangeState.monthly.eventCount,
+      topDomains: toTopDomains(rangeState.monthly.domainTotals)
+    },
+    productivity
+  };
+}
+
 function createDashboardPayload(data) {
   const today = buildRange(data, 1);
   const weekly = buildRange(data, 7);
@@ -65,6 +210,23 @@ function createDashboardPayload(data) {
   const browserStatus = Object.fromEntries(
     Object.entries(rawBrowserStatus).filter(([name]) => name && name !== "undefined" && name !== "Unknown")
   );
+
+  const storedExtensionData = data.extensionData || {};
+  const needsExtensionFallback =
+    !storedExtensionData.totalTabMs &&
+    !storedExtensionData.totalIdleMs &&
+    (!Array.isArray(storedExtensionData.topDomains) || storedExtensionData.topDomains.length === 0);
+  const resolvedExtensionData = needsExtensionFallback
+    ? deriveExtensionDataFromEvents(data)
+    : {
+        topDomains: Array.isArray(storedExtensionData.topDomains) ? storedExtensionData.topDomains : [],
+        totalTabMs: storedExtensionData.totalTabMs || 0,
+        totalIdleMs: storedExtensionData.totalIdleMs || 0,
+        daily: storedExtensionData.daily || {},
+        weekly: storedExtensionData.weekly || {},
+        monthly: storedExtensionData.monthly || {},
+        productivity: storedExtensionData.productivity || 0
+      };
 
   return {
     generatedAt: Date.now(),
@@ -88,15 +250,15 @@ function createDashboardPayload(data) {
     browserStatus,
     installedBrowsers: data.installedBrowsers || {},
     extensionData: {
-       topDomains: Array.isArray(data.extensionData?.topDomains) 
-         ? data.extensionData.topDomains.slice(0, 10)
-         : [],
-      totalTabMs: data.extensionData?.totalTabMs || 0,
-      totalIdleMs: data.extensionData?.totalIdleMs || 0,
-      daily: data.extensionData?.daily || {},
-      weekly: data.extensionData?.weekly || {},
-      monthly: data.extensionData?.monthly || {},
-      productivity: data.extensionData?.productivity || 0
+      topDomains: Array.isArray(resolvedExtensionData.topDomains)
+        ? resolvedExtensionData.topDomains.slice(0, 10)
+        : [],
+      totalTabMs: resolvedExtensionData.totalTabMs || 0,
+      totalIdleMs: resolvedExtensionData.totalIdleMs || 0,
+      daily: resolvedExtensionData.daily || {},
+      weekly: resolvedExtensionData.weekly || {},
+      monthly: resolvedExtensionData.monthly || {},
+      productivity: resolvedExtensionData.productivity || 0
     },
     screenshots: (data.screenshots || []).slice(-10).reverse(),
     periods: {
