@@ -45,6 +45,19 @@ function buildRange(data, days) {
   return aggregateDailyEntries(selected);
 }
 
+function normalizeRollup(rollup) {
+  return {
+    activeMs: rollup?.activeMs || 0,
+    idleMs: rollup?.idleMs || 0,
+    keyboardCount: rollup?.keyboardCount || 0,
+    mouseCount: rollup?.mouseCount || 0,
+    appSwitches: rollup?.appSwitches || 0,
+    browserEvents: rollup?.browserEvents || 0,
+    desktopEvents: rollup?.desktopEvents || 0,
+    appUsageMs: rollup?.appUsageMs || {}
+  };
+}
+
 function deriveExtensionDataFromEvents(data) {
   const browserEvents = Array.isArray(data.browserEvents) ? data.browserEvents : [];
   const now = Date.now();
@@ -192,8 +205,8 @@ function deriveExtensionDataFromEvents(data) {
 
 function createDashboardPayload(data) {
   const today = buildRange(data, 1);
-  const weekly = buildRange(data, 7);
-  const monthly = buildRange(data, 30);
+  const weekly = data?.rollups?.weekly ? normalizeRollup(data.rollups.weekly) : buildRange(data, 7);
+  const monthly = data?.rollups?.monthly ? normalizeRollup(data.rollups.monthly) : buildRange(data, 30);
 
   const extensionStatus = data.extensionStatus || {};
   const now = Date.now();
@@ -230,6 +243,8 @@ function createDashboardPayload(data) {
 
   return {
     generatedAt: Date.now(),
+    lastSyncAt: data.lastSyncAt || null,
+    lastSuccessfulSummarySyncAt: data.syncControl?.lastSuccessfulSummarySyncAt || null,
     auth: data.auth || {
       isAuthenticated: false,
       token: "",
@@ -288,6 +303,7 @@ function createDashboardPayload(data) {
 
 module.exports = {
   createDashboardPayload,
+  deriveExtensionDataFromEvents,
   topApps,
   buildRange
 };

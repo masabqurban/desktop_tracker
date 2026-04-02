@@ -2,7 +2,7 @@ const path = require("path");
 
 const DEFAULTS = {
   pollIntervalMs: 2000,
-  idleThresholdSeconds: 60,
+  idleThresholdSeconds: 300,
   localApiPort: 3002,
   maxTimelineEvents: 20000,
   syncIntervalMs: 60000,

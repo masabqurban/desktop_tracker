@@ -1,6 +1,24 @@
 const fs = require("fs");
 const path = require("path");
 const { DEFAULTS } = require("./config");
+const { deriveExtensionDataFromEvents } = require("./report-service");
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
+const MONTH_MS = 30 * DAY_MS;
+
+function createEmptyRollup() {
+  return {
+    activeMs: 0,
+    idleMs: 0,
+    keyboardCount: 0,
+    mouseCount: 0,
+    appSwitches: 0,
+    browserEvents: 0,
+    desktopEvents: 0,
+    appUsageMs: {}
+  };
+}
 
 const INITIAL_DATA = {
   events: [],
@@ -8,6 +26,10 @@ const INITIAL_DATA = {
   appUsageMs: {},
   openedApps: {},
   daily: {},
+  rollups: {
+    weekly: createEmptyRollup(),
+    monthly: createEmptyRollup()
+  },
   extensionStatus: {
     enabled: true,
     enabledAt: Date.now(),
@@ -64,11 +86,28 @@ const INITIAL_DATA = {
   idleStartTime: null,
   lastSnapshotAt: null,
   lastSyncAt: null,
-  syncQueue: []
+  syncQueue: [],
+  syncControl: {
+    lastWorkState: "unknown",
+    lastOfficeOutDate: null,
+    lastRetryAt: null,
+    lastSyncTriggeredAt: null,
+    lastSuccessfulSummarySyncAt: null,
+    lastWeeklyResetAt: null,
+    lastMonthlyResetAt: null
+  }
 };
 
 function formatDateKey(timestamp) {
   return new Date(timestamp).toISOString().slice(0, 10);
+}
+
+function parseDateKeyToMs(dateKey) {
+  if (typeof dateKey !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+    return NaN;
+  }
+
+  return new Date(`${dateKey}T00:00:00`).getTime();
 }
 
 class DataStore {
@@ -100,6 +139,128 @@ class DataStore {
 
   getSnapshot() {
     return JSON.parse(JSON.stringify(this.data));
+  }
+
+  ensureRollups() {
+    const rollups = this.data.rollups || {};
+    this.data.rollups = {
+      weekly: {
+        ...createEmptyRollup(),
+        ...(rollups.weekly || {})
+      },
+      monthly: {
+        ...createEmptyRollup(),
+        ...(rollups.monthly || {})
+      }
+    };
+  }
+
+  recalculateAppUsageFromDaily() {
+    const usage = {};
+
+    for (const day of Object.values(this.data.daily || {})) {
+      const dayUsage = day?.appUsageMs || {};
+      for (const [appName, durationMs] of Object.entries(dayUsage)) {
+        usage[appName] = (usage[appName] || 0) + (durationMs || 0);
+      }
+    }
+
+    this.data.appUsageMs = usage;
+  }
+
+  resetDailyData(activityDate) {
+    const targetDate = typeof activityDate === "string" && activityDate
+      ? activityDate
+      : formatDateKey(Date.now());
+
+    delete this.data.daily[targetDate];
+
+    this.data.events = (this.data.events || []).filter((event) => {
+      return formatDateKey(event?.timestamp || Date.now()) !== targetDate;
+    });
+
+    this.data.browserEvents = (this.data.browserEvents || []).filter((event) => {
+      return formatDateKey(event?.timestamp || Date.now()) !== targetDate;
+    });
+
+    this.data.screenshots = (this.data.screenshots || []).filter((shot) => {
+      return formatDateKey(shot?.timestamp || Date.now()) !== targetDate;
+    });
+
+    // Rebuild extension aggregates from remaining browser events so desktop view
+    // stays consistent with extension popup after office-out resets.
+    this.data.extensionData = deriveExtensionDataFromEvents(this.data);
+
+    this.recalculateAppUsageFromDaily();
+    this.data.openedApps = {};
+  }
+
+  pruneHistoryDays(maxDays) {
+    const now = Date.now();
+    const cutoff = now - maxDays * DAY_MS;
+
+    this.data.events = (this.data.events || []).filter((event) => (event?.timestamp || 0) >= cutoff);
+    this.data.browserEvents = (this.data.browserEvents || []).filter((event) => (event?.timestamp || 0) >= cutoff);
+    this.data.screenshots = (this.data.screenshots || []).filter((shot) => (shot?.timestamp || 0) >= cutoff);
+
+    const filteredDaily = {};
+    for (const [dateKey, entry] of Object.entries(this.data.daily || {})) {
+      const dateMs = parseDateKeyToMs(dateKey);
+      if (!Number.isNaN(dateMs) && dateMs >= cutoff) {
+        filteredDaily[dateKey] = entry;
+      }
+    }
+
+    this.data.daily = filteredDaily;
+    this.recalculateAppUsageFromDaily();
+  }
+
+  applyPostSyncResets(activityDate) {
+    const now = Date.now();
+    const control = this.getSyncControl();
+
+    this.ensureRollups();
+
+    this.resetDailyData(activityDate);
+
+    const syncPatch = {
+      lastSuccessfulSummarySyncAt: now
+    };
+
+    if (!control.lastWeeklyResetAt) {
+      syncPatch.lastWeeklyResetAt = now;
+    } else if (now - control.lastWeeklyResetAt >= WEEK_MS) {
+      this.data.rollups.weekly = createEmptyRollup();
+      this.data.extensionData = {
+        ...(this.data.extensionData || {}),
+        weekly: {
+          tabMs: 0,
+          idleMs: 0,
+          eventCount: 0,
+          topDomains: []
+        }
+      };
+      syncPatch.lastWeeklyResetAt = now;
+    }
+
+    if (!control.lastMonthlyResetAt) {
+      syncPatch.lastMonthlyResetAt = now;
+    } else if (now - control.lastMonthlyResetAt >= MONTH_MS) {
+      this.data.rollups.monthly = createEmptyRollup();
+      this.pruneHistoryDays(30);
+      this.data.extensionData = {
+        ...(this.data.extensionData || {}),
+        monthly: {
+          tabMs: 0,
+          idleMs: 0,
+          eventCount: 0,
+          topDomains: []
+        }
+      };
+      syncPatch.lastMonthlyResetAt = now;
+    }
+
+    this.updateSyncControl(syncPatch);
   }
 
   addOpenedApp(appName, timestamp) {
@@ -139,6 +300,17 @@ class DataStore {
 
     daily.appUsageMs[appName] = (daily.appUsageMs[appName] || 0) + durationMs;
     this.data.daily[key] = daily;
+
+    this.ensureRollups();
+    for (const periodName of ["weekly", "monthly"]) {
+      const rollup = this.data.rollups[periodName];
+      if (isIdle) {
+        rollup.idleMs += durationMs;
+      } else {
+        rollup.activeMs += durationMs;
+      }
+      rollup.appUsageMs[appName] = (rollup.appUsageMs[appName] || 0) + durationMs;
+    }
   }
 
   addInputCount(type, count, timestamp) {
@@ -163,6 +335,17 @@ class DataStore {
     }
 
     this.data.daily[key] = daily;
+
+    this.ensureRollups();
+    for (const periodName of ["weekly", "monthly"]) {
+      const rollup = this.data.rollups[periodName];
+      if (type === "keyboard") {
+        rollup.keyboardCount += count;
+      }
+      if (type === "mouse") {
+        rollup.mouseCount += count;
+      }
+    }
   }
 
   incrementAppSwitch(timestamp) {
@@ -180,6 +363,10 @@ class DataStore {
 
     daily.appSwitches += 1;
     this.data.daily[key] = daily;
+
+    this.ensureRollups();
+    this.data.rollups.weekly.appSwitches += 1;
+    this.data.rollups.monthly.appSwitches += 1;
   }
 
   addDesktopEvent(event) {
@@ -202,6 +389,10 @@ class DataStore {
 
     daily.desktopEvents += 1;
     this.data.daily[key] = daily;
+
+    this.ensureRollups();
+    this.data.rollups.weekly.desktopEvents += 1;
+    this.data.rollups.monthly.desktopEvents += 1;
   }
 
   addBrowserEvent(event) {
@@ -224,15 +415,39 @@ class DataStore {
 
     daily.browserEvents += 1;
     this.data.daily[key] = daily;
+
+    this.ensureRollups();
+    this.data.rollups.weekly.browserEvents += 1;
+    this.data.rollups.monthly.browserEvents += 1;
   }
 
   queueForSync(payload) {
+    const dedupeKey = payload?.dedupeKey || null;
+    if (dedupeKey) {
+      const existingIndex = this.data.syncQueue.findIndex(
+        (item) => item?.payload?.dedupeKey === dedupeKey
+      );
+
+      if (existingIndex >= 0) {
+        const existing = this.data.syncQueue[existingIndex];
+        this.data.syncQueue[existingIndex] = {
+          ...existing,
+          payload,
+          createdAt: Date.now()
+        };
+        return existing.id;
+      }
+    }
+
+    const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     this.data.syncQueue.push({
-      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      id,
       payload,
       createdAt: Date.now(),
       attempts: 0
     });
+
+    return id;
   }
 
   markSyncSuccess(ids) {
@@ -394,6 +609,30 @@ class DataStore {
 
   getAuthSession() {
     return { ...(this.data.auth || {}) };
+  }
+
+  getSyncControl() {
+    return {
+      lastWorkState: this.data.syncControl?.lastWorkState || "unknown",
+      lastOfficeOutDate: this.data.syncControl?.lastOfficeOutDate || null,
+      lastRetryAt: this.data.syncControl?.lastRetryAt || null,
+      lastSyncTriggeredAt: this.data.syncControl?.lastSyncTriggeredAt || null,
+      lastSuccessfulSummarySyncAt: this.data.syncControl?.lastSuccessfulSummarySyncAt || null,
+      lastWeeklyResetAt: this.data.syncControl?.lastWeeklyResetAt || null,
+      lastMonthlyResetAt: this.data.syncControl?.lastMonthlyResetAt || null
+    };
+  }
+
+  updateSyncControl(patch) {
+    const current = this.getSyncControl();
+    this.data.syncControl = {
+      ...current,
+      ...(patch || {})
+    };
+  }
+
+  hasPendingSyncQueue() {
+    return Array.isArray(this.data.syncQueue) && this.data.syncQueue.length > 0;
   }
 }
 

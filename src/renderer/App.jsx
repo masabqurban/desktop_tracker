@@ -19,6 +19,19 @@ function formatNumber(value) {
   return Number(value || 0).toLocaleString();
 }
 
+function formatDateTime(value) {
+  if (!value) {
+    return "Never";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "Never";
+  }
+
+  return date.toLocaleString();
+}
+
 function ratioPercent(part, total) {
   if (!total || total <= 0) {
     return 0;
@@ -74,7 +87,6 @@ function App() {
   const PAGE_SIZE = 15;
   const SCREENSHOT_PAGE_SIZE = 3;
   const [dashboard, setDashboard] = useState(null);
-  const [syncing, setSyncing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState("-");
   const [activeTab, setActiveTab] = useState("system");
   const [browserVisibleCount, setBrowserVisibleCount] = useState(PAGE_SIZE);
@@ -123,6 +135,9 @@ function App() {
   const screenshots = useMemo(() => dashboard?.screenshots || [], [dashboard]);
   const browserEvents = useMemo(() => dashboard?.allBrowserEvents || dashboard?.recentBrowserEvents || [], [dashboard]);
   const desktopEvents = useMemo(() => dashboard?.allDesktopEvents || dashboard?.recentDesktopEvents || [], [dashboard]);
+  const lastSyncLabel = useMemo(() => {
+    return formatDateTime(dashboard?.lastSuccessfulSummarySyncAt || dashboard?.lastSyncAt || null);
+  }, [dashboard]);
 
   const visibleBrowserEvents = useMemo(
     () => browserEvents.slice(0, browserVisibleCount),
@@ -180,14 +195,6 @@ function App() {
       };
     });
   }, [dashboard]);
-
-  const onSyncNow = async () => {
-    setSyncing(true);
-    await window.trackerApi.queueSync("manual");
-    await window.trackerApi.forceSync();
-    await loadDashboard();
-    setSyncing(false);
-  };
 
   const onLogin = async (event) => {
     event.preventDefault();
@@ -252,33 +259,12 @@ function App() {
   const employee = auth.employee || null;
   const isAuthenticated = Boolean(auth.isAuthenticated && auth.token);
 
-  // Check if current time is within office hours
-  const isWithinOfficeHours = (() => {
-    if (!employee?.officeIn || !employee?.officeOut) {
-      return true; // If no office hours set, consider tracking always active
-    }
-
-    try {
-      const now = new Date();
-      const [inHour, inMin] = employee.officeIn.split(":").map(Number);
-      const [outHour, outMin] = employee.officeOut.split(":").map(Number);
-
-      const officeIn = new Date();
-      officeIn.setHours(inHour, inMin, 0, 0);
-
-      const officeOut = new Date();
-      officeOut.setHours(outHour, outMin, 0, 0);
-
-      // Handle case where office out is next day
-      if (officeOut < officeIn) {
-        officeOut.setDate(officeOut.getDate() + 1);
-      }
-
-      return now >= officeIn && now < officeOut;
-    } catch {
-      return true;
-    }
-  })();
+  const isWithinOfficeHours = Boolean(
+    isAuthenticated &&
+    employee?.officeIn &&
+    !employee?.officeOut &&
+    employee?.isOnBreak !== true
+  );
   const allBrowsers = Object.entries(installedMap)
     .filter(([, info]) => Boolean(info?.installed))
     .map(([name, info]) => {
@@ -302,9 +288,6 @@ function App() {
         </div>
         <div className="hero-actions">
           <button onClick={loadDashboard}>Refresh</button>
-          <button onClick={onSyncNow} disabled={syncing || !isAuthenticated}>
-            {syncing ? "Syncing..." : "Sync to ERP"}
-          </button>
         </div>
       </header>
 
@@ -324,6 +307,7 @@ function App() {
           </button>
         </div>
         <div className="updated-pill">Last updated: {lastUpdated}</div>
+        <div className="updated-pill">Last sync: {lastSyncLabel}</div>
       </section>
 
       <section className="card auth-card">
@@ -364,11 +348,11 @@ function App() {
             <p><strong>Designation:</strong> {employee?.designation || "-"}</p>
             <p><strong>Office In:</strong> {employee?.officeIn || "-"}</p>
             <p><strong>Office Out:</strong> {employee?.officeOut || "-"}</p>
-            {employee?.officeIn && employee?.officeOut && (
+            {employee?.officeIn && (
               <p className="office-hours-status">
                 <strong>Status:</strong>
                 <span className={`status-badge ${isWithinOfficeHours ? 'active' : 'inactive'}`}>
-                  {isWithinOfficeHours ? '🟢 Tracking Active' : '🔴 Outside Office Hours'}
+                  {isWithinOfficeHours ? '🟢 Tracking Active' : '🔴 Tracking Paused'}
                 </span>
               </p>
             )}

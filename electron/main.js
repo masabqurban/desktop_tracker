@@ -17,6 +17,7 @@ let trackerService;
 let localApiServer;
 let syncService;
 let authService;
+let authProfileTimer;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -57,6 +58,7 @@ async function bootstrapServices() {
 
   // Validate stored auth token on startup (in case token expired while app was closed)
   await authService.validateStoredAuthToken();
+  await syncService.handleEmployeeStateChange("startup_validate");
 
   localApiServer = new LocalApiServer({
     dataStore,
@@ -75,9 +77,33 @@ async function bootstrapServices() {
   await trackerService.start();
   localApiServer.start();
   syncService.start();
-  syncService.queueDesktopSnapshot("startup");
+  startAuthProfileRefreshLoop();
 
   log.info("Employee Desktop Tracker started.");
+}
+
+function startAuthProfileRefreshLoop() {
+  if (authProfileTimer) {
+    clearInterval(authProfileTimer);
+  }
+
+  authProfileTimer = setInterval(async () => {
+    try {
+      const session = authService.getSession();
+      if (!session?.isAuthenticated || !session?.token) {
+        await syncService.handleEmployeeStateChange("background_no_session");
+        return;
+      }
+
+      await authService.refreshEmployeeProfile();
+      await syncService.handleEmployeeStateChange("background_profile_refresh");
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("tracker:update");
+      }
+    } catch {
+      // Ignore transient refresh errors; next loop will retry.
+    }
+  }, 60 * 1000);
 }
 
 function registerIpc() {
@@ -126,7 +152,7 @@ function registerIpc() {
   ipcMain.handle("tracker:auth-login", async (_event, payload) => {
     try {
       const session = await authService.login(payload || {});
-      syncService.queueDesktopSnapshot("auth_login");
+      await syncService.handleEmployeeStateChange("auth_login");
       return { ok: true, session };
     } catch (error) {
       return { ok: false, error: error?.response?.data?.message || error?.message || "Login failed" };
@@ -135,6 +161,7 @@ function registerIpc() {
 
   ipcMain.handle("tracker:auth-logout", async () => {
     const session = await authService.logout();
+    await syncService.handleEmployeeStateChange("auth_logout");
     return { ok: true, session };
   });
 
@@ -145,6 +172,7 @@ function registerIpc() {
   ipcMain.handle("tracker:auth-refresh", async () => {
     try {
       const session = await authService.refreshEmployeeProfile();
+      await syncService.handleEmployeeStateChange("manual_profile_refresh");
       return { ok: true, session };
     } catch (error) {
       return { ok: false, error: error?.response?.data?.message || error?.message || "Profile refresh failed" };
@@ -177,9 +205,12 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", async () => {
+  if (authProfileTimer) {
+    clearInterval(authProfileTimer);
+    authProfileTimer = null;
+  }
+
   if (syncService) {
-    syncService.queueDesktopSnapshot("shutdown");
-    await syncService.flushQueue();
     syncService.stop();
   }
 

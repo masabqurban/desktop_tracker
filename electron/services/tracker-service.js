@@ -4,6 +4,9 @@ const os = require("os");
 const { powerMonitor, desktopCapturer, screen } = require("electron");
 const { DEFAULTS } = require("./config");
 
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+const IDLE_SCREENSHOT_INTERVAL_MS = 7 * 60 * 1000;
+
 class TrackerService {
   constructor({ dataStore, onUpdate }) {
     this.dataStore = dataStore;
@@ -21,7 +24,7 @@ class TrackerService {
     this.activeWinAvailable = false;
     this.activeWinWarningLogged = false;
     this.lastActivityAt = Date.now();
-    this.idleTimeout = 60000; // 60 seconds of no input = idle
+    this.idleTimeout = IDLE_TIMEOUT_MS;
     this.idleStartTime = null;
     this.screenshotDir = path.join(os.homedir(), ".employee-tracker", "screenshots");
   }
@@ -60,7 +63,7 @@ class TrackerService {
 
   async captureIdleScreenshot(timestamp) {
     try {
-      const idleCaptureMs = 60000;
+      const idleCaptureMs = IDLE_SCREENSHOT_INTERVAL_MS;
       const displays = screen.getAllDisplays();
       if (displays.length === 0) {
         return;
@@ -147,7 +150,7 @@ class TrackerService {
         type: "idle_screenshot",
         screenshotPath: filepath,
         timestamp,
-        idleMinutes: 1,
+        idleMinutes: 7,
         displayId: sourceDisplayId,
         isActiveDisplay: String(sourceDisplayId) === activeId,
         resolution: `${imageSize.width}x${imageSize.height}`,
@@ -194,44 +197,28 @@ class TrackerService {
 
   isWithinOfficeHours() {
     const session = this.dataStore.getAuthSession();
-    if (!session?.isAuthenticated || !session?.employee) {
-      // If not authenticated, allow tracking
-      return true;
+    if (!session?.isAuthenticated || !session?.token) {
+      return false;
     }
 
     const employee = session.employee;
+    if (!employee) {
+      return false;
+    }
+
+    if (!employee.officeIn) {
+      return false;
+    }
+
     if (employee.isOnBreak) {
       return false;
     }
-    const officeInStr = employee.officeIn;
-    const officeOutStr = employee.officeOut;
 
-    if (!officeInStr || !officeOutStr) {
-      // If office hours not set, allow tracking
-      return true;
+    if (employee.officeOut) {
+      return false;
     }
 
-    try {
-      const now = new Date();
-      const [inHour, inMin] = officeInStr.split(":").map(Number);
-      const [outHour, outMin] = officeOutStr.split(":").map(Number);
-
-      const officeIn = new Date();
-      officeIn.setHours(inHour, inMin, 0, 0);
-
-      const officeOut = new Date();
-      officeOut.setHours(outHour, outMin, 0, 0);
-
-      // Handle case where office out is next day (e.g., 9:00 to 17:00 assumed same day, but 10:00 to 2:00 crosses midnight)
-      if (officeOut < officeIn) {
-        officeOut.setDate(officeOut.getDate() + 1);
-      }
-
-      return now >= officeIn && now < officeOut;
-    } catch {
-      // If parsing fails, allow tracking
-      return true;
-    }
+    return true;
   }
 
   async poll() {
@@ -247,6 +234,10 @@ class TrackerService {
     if (wasTrackingEnabled && !this.isTrackingEnabled) {
       await this.finalizeCurrentWindow("office_hours_ended");
       this.currentWindow = null;
+      this.keyboardDelta = 0;
+      this.mouseDelta = 0;
+      this.idle = false;
+      this.idleStartTime = null;
       return;
     }
 
@@ -258,6 +249,10 @@ class TrackerService {
 
     // If outside office hours, don't track anything
     if (!this.isTrackingEnabled) {
+      this.keyboardDelta = 0;
+      this.mouseDelta = 0;
+      this.idle = false;
+      this.idleStartTime = null;
       return;
     }
 
@@ -339,8 +334,6 @@ class TrackerService {
       this.idle = currentlyIdle;
       if (this.idle) {
         this.idleStartTime = now;
-        // Capture immediately when entering idle, then continue at the interval below.
-        await this.captureIdleScreenshot(now);
       } else {
         this.idleStartTime = null;
       }
@@ -353,10 +346,10 @@ class TrackerService {
       });
     }
 
-    // Capture screenshot every 1 minute while still idle (testing)
-    if (this.idle && this.idleStartTime && (now - this.idleStartTime >= 60000)) {
+    // Capture screenshot every 7 minutes while continuously idle.
+    if (this.idle && this.idleStartTime && (now - this.idleStartTime >= IDLE_SCREENSHOT_INTERVAL_MS)) {
       await this.captureIdleScreenshot(now);
-      this.idleStartTime = now; // Reset to capture again after next 1 minute
+      this.idleStartTime = now;
     }
 
     this.dataStore.touchSnapshot(now);

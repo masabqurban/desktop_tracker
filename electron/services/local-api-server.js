@@ -56,7 +56,6 @@ class LocalApiServer {
       }
 
       this.dataStore.addBrowserEvent(normalized);
-      this.syncService.queueBrowserEvent(normalized);
       this.dataStore.persist();
 
       res.json({ ok: true });
@@ -95,44 +94,34 @@ class LocalApiServer {
       res.json(result);
     });
 
+    this.app.get("/api/sync-status", (_req, res) => {
+      const snapshot = this.dataStore.getSnapshot();
+      const syncControl = snapshot.syncControl || {};
+
+      res.json({
+        ok: true,
+        lastSyncAt: snapshot.lastSyncAt || null,
+        lastSuccessfulSummarySyncAt: syncControl.lastSuccessfulSummarySyncAt || null,
+        lastWeeklyResetAt: syncControl.lastWeeklyResetAt || null,
+        lastMonthlyResetAt: syncControl.lastMonthlyResetAt || null
+      });
+    });
+
     this.app.get("/api/office-hours-status", (_req, res) => {
       const snapshot = this.dataStore.getSnapshot();
       const session = snapshot.auth || {};
       const employee = session.employee || null;
       const isAuthenticated = Boolean(session.isAuthenticated && session.token);
       const isOnBreak = Boolean(employee?.isOnBreak);
-
-      // Check if current time is within office hours
-      let isWithinOfficeHours = true; // Default: allow tracking
-      if (isOnBreak) {
-        isWithinOfficeHours = false;
-      } else if (isAuthenticated && employee?.officeIn && employee?.officeOut) {
-        try {
-          const now = new Date();
-          const [inHour, inMin] = employee.officeIn.split(":").map(Number);
-          const [outHour, outMin] = employee.officeOut.split(":").map(Number);
-
-          const officeIn = new Date();
-          officeIn.setHours(inHour, inMin, 0, 0);
-
-          const officeOut = new Date();
-          officeOut.setHours(outHour, outMin, 0, 0);
-
-          // Handle case where office out is next day
-          if (officeOut < officeIn) {
-            officeOut.setDate(officeOut.getDate() + 1);
-          }
-
-          isWithinOfficeHours = now >= officeIn && now < officeOut;
-        } catch {
-          isWithinOfficeHours = true;
-        }
-      }
+      const hasOfficeIn = Boolean(employee?.officeIn);
+      const hasOfficeOut = Boolean(employee?.officeOut);
+      const isTrackingActive = isAuthenticated && hasOfficeIn && !hasOfficeOut && !isOnBreak;
 
       res.json({
         ok: true,
         isAuthenticated,
-        isWithinOfficeHours,
+        isWithinOfficeHours: isTrackingActive,
+        isTrackingActive,
         isOnBreak,
         employee: employee ? {
           id: employee.id,
