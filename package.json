@@ -9,7 +9,12 @@
     "dev": "concurrently \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
     "start": "electron .",
     "build": "vite build",
-    "dist": "npm run build && electron-builder -mwl"
+    "dist": "npm run build && electron-builder -mwl",
+    "dist:win": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\build-win.ps1",
+    "dist:win:raw": "npm run build && electron-builder --win nsis --x64",
+    "dist:mac:arm64": "npm run build && electron-builder --mac dmg --arm64",
+    "dist:mac:x64": "npm run build && electron-builder --mac dmg --x64",
+    "dist:mac:universal": "npm run build && electron-builder --mac dmg --universal"
   },
   "dependencies": {
     "active-win": "^9.0.0",
@@ -28,7 +33,7 @@
     "cross-env": "^7.0.3",
     "electron": "^41.1.0",
     "electron-builder": "^26.8.1",
-    "vite": "^8.0.3",
+    "vite": "^7.3.1",
     "wait-on": "^8.0.2"
   },
   "build": {

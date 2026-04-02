@@ -63,6 +63,43 @@ This builds installers for:
 - macOS (`dmg`/default electron-builder target)
 - Linux (`AppImage`, `deb`)
 
+## Build Windows Installer Only
+
+Recommended (auto-clean + retry fallback for occasional `rcedit` lock issues):
+
+```bash
+npm run dist:win
+```
+
+Raw command (no fallback):
+
+```bash
+npm run dist:win:raw
+```
+
+If packaging fails with `Fatal error: Unable to commit changes`, close any running `Employee Desktop Tracker` or `electron` process and run `npm run dist:win` again.
+
+## Build macOS Installer When You Only Have Windows
+
+You cannot reliably produce a macOS DMG installer locally from Windows.
+
+Use the included GitHub Actions workflow on a macOS runner:
+
+1. Push this project to GitHub.
+2. Open Actions tab and run workflow: Build Mac Installer.
+3. Download artifact: mac-installer.
+4. Send the `.dmg` file to the Mac employee.
+
+Workflow file:
+
+- `.github/workflows/build-mac.yml`
+
+Available mac build scripts (used by CI and usable on a real Mac):
+
+- `npm run dist:mac:arm64`
+- `npm run dist:mac:x64`
+- `npm run dist:mac:universal`
+
 ## Notes on Cross-Platform Support
 
 Electron supports all three target OS platforms.
