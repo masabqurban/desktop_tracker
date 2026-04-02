@@ -12,9 +12,9 @@
     "dist": "npm run build && electron-builder -mwl",
     "dist:win": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\build-win.ps1",
     "dist:win:raw": "npm run build && electron-builder --win nsis --x64",
-    "dist:mac:arm64": "npm run build && electron-builder --mac dmg --arm64",
-    "dist:mac:x64": "npm run build && electron-builder --mac dmg --x64",
-    "dist:mac:universal": "npm run build && electron-builder --mac dmg --universal"
+    "dist:mac:arm64": "npm run build && electron-builder --mac dmg --arm64 --publish never",
+    "dist:mac:x64": "npm run build && electron-builder --mac dmg --x64 --publish never",
+    "dist:mac:universal": "npm run build && electron-builder --mac dmg --universal --publish never"
   },
   "dependencies": {
     "active-win": "^9.0.0",
