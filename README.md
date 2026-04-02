@@ -87,8 +87,10 @@ Use the included GitHub Actions workflow on a macOS runner:
 
 1. Push this project to GitHub.
 2. Open Actions tab and run workflow: Build Mac Installer.
-3. Download artifact: mac-installer.
-4. Send the `.dmg` file to the Mac employee.
+3. Download artifacts: `mac-installer-arm64` and `mac-installer-x64`.
+4. Send the correct `.dmg` to the Mac employee:
+	- Apple Silicon (M1/M2/M3): arm64
+	- Intel Mac: x64
 
 Workflow file:
 
@@ -98,7 +100,8 @@ Available mac build scripts (used by CI and usable on a real Mac):
 
 - `npm run dist:mac:arm64`
 - `npm run dist:mac:x64`
-- `npm run dist:mac:universal`
+
+Note: `dist:mac:universal` can fail when native modules are present (for example `active-win`), so prefer arch-specific builds.
 
 ## Notes on Cross-Platform Support
 
