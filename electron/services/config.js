@@ -6,10 +6,10 @@ const DEFAULTS = {
   localApiPort: 3002,
   maxTimelineEvents: 20000,
   syncIntervalMs: 60000,
-  erpBaseUrl: process.env.ERP_BASE_URL || "http://127.0.0.1:8000",
-  erpDesktopEndpoint: process.env.ERP_DESKTOP_ENDPOINT || "http://127.0.0.1:8000/api/admin/tracker/desktop-activity",
-  erpBrowserEndpoint: process.env.ERP_BROWSER_ENDPOINT || "http://127.0.0.1:8000/api/admin/tracker/browser-activity",
-  erpScreenshotEndpoint: process.env.ERP_SCREENSHOT_ENDPOINT || "http://127.0.0.1:8000/api/admin/tracker/screenshot",
+  erpBaseUrl: process.env.ERP_BASE_URL || "https://erp.vendaxis.com",
+  erpDesktopEndpoint: process.env.ERP_DESKTOP_ENDPOINT || "https://erp.vendaxis.com/api/admin/tracker/desktop-activity",
+  erpBrowserEndpoint: process.env.ERP_BROWSER_ENDPOINT || "https://erp.vendaxis.com/api/admin/tracker/browser-activity",
+  erpScreenshotEndpoint: process.env.ERP_SCREENSHOT_ENDPOINT || "https://erp.vendaxis.com/api/admin/tracker/screenshot",
   erpAuthToken: process.env.ERP_AUTH_TOKEN || "",
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
 };

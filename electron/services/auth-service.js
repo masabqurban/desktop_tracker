@@ -3,7 +3,7 @@ const axios = require("axios");
 class AuthService {
   constructor({ dataStore, erpBaseUrl }) {
     this.dataStore = dataStore;
-    this.erpBaseUrl = (erpBaseUrl || "http://127.0.0.1:8000").replace(/\/+$/, "");
+    this.erpBaseUrl = (erpBaseUrl || "https://erp.vendaxis.com").replace(/\/+$/, "");
   }
 
   async login({ email, password }) {
