@@ -66,6 +66,73 @@ function statusLooksLikeBreak(attendanceStatus) {
   );
 }
 
+function statusLooksLikeOfficeOut(attendanceStatus) {
+  if (!attendanceStatus) {
+    return false;
+  }
+
+  const lowered = String(attendanceStatus).toLowerCase();
+  return (
+    lowered.includes("office out") ||
+    lowered.includes("checked out") ||
+    lowered.includes("clocked out")
+  );
+}
+
+function parseTimeToSeconds(value) {
+  if (!value) {
+    return null;
+  }
+
+  const text = String(value).trim();
+  if (!text) {
+    return null;
+  }
+
+  const timeMatch = text.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!timeMatch) {
+    return null;
+  }
+
+  const hours = Number(timeMatch[1]);
+  const minutes = Number(timeMatch[2]);
+  const seconds = Number(timeMatch[3] || 0);
+
+  if (
+    Number.isNaN(hours) ||
+    Number.isNaN(minutes) ||
+    Number.isNaN(seconds) ||
+    hours < 0 ||
+    hours > 23 ||
+    minutes < 0 ||
+    minutes > 59 ||
+    seconds < 0 ||
+    seconds > 59
+  ) {
+    return null;
+  }
+
+  return (hours * 60 * 60) + (minutes * 60) + seconds;
+}
+
+function inferBreakByTimes(breakIn, breakOut) {
+  if (!breakIn) {
+    return false;
+  }
+
+  if (!breakOut) {
+    return true;
+  }
+
+  const breakInSeconds = parseTimeToSeconds(breakIn);
+  const breakOutSeconds = parseTimeToSeconds(breakOut);
+  if (breakInSeconds === null || breakOutSeconds === null) {
+    return false;
+  }
+
+  return breakInSeconds > breakOutSeconds;
+}
+
 class AuthService {
   constructor({ dataStore, erpBaseUrl }) {
     this.dataStore = dataStore;
@@ -151,17 +218,19 @@ class AuthService {
       return null;
     }
 
-    const officeIn = normalizeNullableText(employee.office_in);
-    const officeOut = normalizeNullableText(employee.office_out);
-    const attendanceStatus = normalizeNullableText(employee.attendance_status);
-    const breakIn = normalizeNullableText(employee.break_in);
-    const breakOut = normalizeNullableText(employee.break_out);
-    const explicitBreakFlag = parseBooleanLike(employee.is_on_break);
-    const inferredBreakFromTimes = Boolean(breakIn && !breakOut);
+    const officeIn = normalizeNullableText(employee.office_in ?? employee.officeIn);
+    const attendanceStatus = normalizeNullableText(employee.attendance_status ?? employee.attendanceStatus);
+    const explicitOfficeOut = normalizeNullableText(employee.office_out ?? employee.officeOut);
+    const officeOut = explicitOfficeOut || (statusLooksLikeOfficeOut(attendanceStatus) ? attendanceStatus : null);
+    const breakIn = normalizeNullableText(employee.break_in ?? employee.breakIn);
+    const breakOut = normalizeNullableText(employee.break_out ?? employee.breakOut);
+    const explicitBreakFlag = parseBooleanLike(employee.is_on_break ?? employee.isOnBreak);
+    const inferredBreakFromTimes = inferBreakByTimes(breakIn, breakOut);
     const inferredBreakFromStatus = statusLooksLikeBreak(attendanceStatus);
-    const isOnBreak = explicitBreakFlag === null
-      ? inferredBreakFromTimes || inferredBreakFromStatus
-      : explicitBreakFlag;
+    const isOnBreak =
+      explicitBreakFlag === true ||
+      inferredBreakFromTimes ||
+      inferredBreakFromStatus;
 
     return {
       id: employee.id,
@@ -174,11 +243,11 @@ class AuthService {
       breakIn,
       breakOut,
       isOnBreak,
-      forgotToOut: parseBooleanLike(employee.forgot_to_out) === true,
-      attendanceDate: normalizeNullableText(employee.attendance_date),
-      serverNow: normalizeNullableText(employee.server_now),
-      serverDate: normalizeNullableText(employee.server_date),
-      serverTime: normalizeNullableText(employee.server_time),
+      forgotToOut: parseBooleanLike(employee.forgot_to_out ?? employee.forgotToOut) === true,
+      attendanceDate: normalizeNullableText(employee.attendance_date ?? employee.attendanceDate),
+      serverNow: normalizeNullableText(employee.server_now ?? employee.serverNow),
+      serverDate: normalizeNullableText(employee.server_date ?? employee.serverDate),
+      serverTime: normalizeNullableText(employee.server_time ?? employee.serverTime),
       erpTimezone: normalizeNullableText(employee.timezone),
       shiftStartTime: normalizeNullableText(employee.shift_start_time),
       shiftEndTime: normalizeNullableText(employee.shift_end_time),
