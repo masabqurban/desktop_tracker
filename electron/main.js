@@ -240,6 +240,16 @@ function registerIpc() {
     try {
       const session = await authService.refreshEmployeeProfile();
       await syncService.handleEmployeeStateChange("manual_profile_refresh");
+
+      // Apply refreshed break/office state immediately without waiting for the next poll tick.
+      if (trackerService?.poll) {
+        await trackerService.poll();
+      }
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("tracker:update");
+      }
+
       return { ok: true, session };
     } catch (error) {
       return { ok: false, error: error?.response?.data?.message || error?.message || "Profile refresh failed" };

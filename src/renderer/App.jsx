@@ -255,6 +255,16 @@ function App() {
     !employee?.officeOut &&
     employee?.isOnBreak !== true
   );
+
+  const authStatusLabel = !isAuthenticated
+    ? "Not Linked"
+    : employee?.officeOut
+      ? "Office Out"
+      : employee?.isOnBreak === true
+        ? "On Break"
+        : isWithinOfficeHours
+          ? "Tracking Active"
+          : "Tracking Paused";
   const allBrowsers = Object.entries(installedMap)
     .filter(([, info]) => Boolean(info?.installed))
     .map(([name, info]) => {
@@ -342,7 +352,7 @@ function App() {
               <p className="office-hours-status">
                 <strong>Status:</strong>
                 <span className={`status-badge ${isWithinOfficeHours ? 'active' : 'inactive'}`}>
-                  {isWithinOfficeHours ? '🟢 Tracking Active' : '🔴 Tracking Paused'}
+                  {isWithinOfficeHours ? '🟢' : '🔴'} {authStatusLabel}
                 </span>
               </p>
             )}
