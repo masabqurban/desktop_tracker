@@ -327,7 +327,9 @@ class SyncService {
       }
     }
 
-    if (currentState === "working" && hasPending) {
+    // Retry pending uploads only when entering working state
+    // (for example next office-in), not on every background refresh.
+    if (currentState === "working" && previousState !== "working" && hasPending) {
       const syncResult = await this.flushQueue();
       this.dataStore.updateSyncControl({
         lastWorkState: currentState,
