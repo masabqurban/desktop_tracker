@@ -6,6 +6,39 @@ const { DEFAULTS } = require("./config");
 
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const IDLE_SCREENSHOT_INTERVAL_MS = 7 * 60 * 1000;
+const MAX_TRACKABLE_GAP_MS = Math.max((DEFAULTS.pollIntervalMs || 10000) * 3, 2 * 60 * 1000);
+const SHIFT_OVERRUN_GRACE_SECONDS = 2 * 60 * 60;
+
+function parseTimeToSeconds(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const parts = value.trim().split(":");
+  if (parts.length < 2) {
+    return null;
+  }
+
+  const hours = Number(parts[0]);
+  const minutes = Number(parts[1]);
+  const seconds = Number(parts[2] || 0);
+
+  if (
+    Number.isNaN(hours) ||
+    Number.isNaN(minutes) ||
+    Number.isNaN(seconds) ||
+    hours < 0 ||
+    hours > 23 ||
+    minutes < 0 ||
+    minutes > 59 ||
+    seconds < 0 ||
+    seconds > 59
+  ) {
+    return null;
+  }
+
+  return (hours * 60 * 60) + (minutes * 60) + seconds;
+}
 
 class TrackerService {
   constructor({ dataStore, onUpdate }) {
@@ -26,6 +59,7 @@ class TrackerService {
     this.lastActivityAt = Date.now();
     this.idleTimeout = IDLE_TIMEOUT_MS;
     this.idleStartTime = null;
+    this.skipNextDelta = false;
     this.screenshotDir = path.join(os.homedir(), ".employee-tracker", "screenshots");
   }
 
@@ -218,13 +252,59 @@ class TrackerService {
       return false;
     }
 
+    if (this.hasShiftCutoffPassed(employee)) {
+      return false;
+    }
+
     return true;
+  }
+
+  hasShiftCutoffPassed(employee) {
+    if (!employee?.shiftEndTime || !employee?.serverTime) {
+      return false;
+    }
+
+    const shiftEndSeconds = parseTimeToSeconds(employee.shiftEndTime);
+    const serverSeconds = parseTimeToSeconds(employee.serverTime);
+    if (shiftEndSeconds === null || serverSeconds === null) {
+      return false;
+    }
+
+    return serverSeconds >= shiftEndSeconds + SHIFT_OVERRUN_GRACE_SECONDS;
+  }
+
+  async handleSystemSuspend() {
+    await this.finalizeCurrentWindow("system_suspend");
+    this.lastTickAt = Date.now();
+    this.skipNextDelta = true;
+    this.keyboardDelta = 0;
+    this.mouseDelta = 0;
+    this.idleStartTime = null;
+    this.dataStore.persist();
+  }
+
+  handleSystemResume() {
+    this.lastTickAt = Date.now();
+    this.lastActivityAt = Date.now();
+    this.skipNextDelta = true;
+    this.keyboardDelta = 0;
+    this.mouseDelta = 0;
+    this.idle = false;
+    this.idleStartTime = null;
   }
 
   async poll() {
     const now = Date.now();
-    const deltaMs = Math.max(0, now - (this.lastTickAt || now));
+    let deltaMs = Math.max(0, now - (this.lastTickAt || now));
     this.lastTickAt = now;
+
+    const gapExceeded = deltaMs > MAX_TRACKABLE_GAP_MS || this.skipNextDelta;
+    if (gapExceeded) {
+      deltaMs = 0;
+      this.skipNextDelta = false;
+      this.lastActivityAt = now;
+      this.idleStartTime = null;
+    }
 
     // Check if currently within office hours
     const wasTrackingEnabled = this.isTrackingEnabled;

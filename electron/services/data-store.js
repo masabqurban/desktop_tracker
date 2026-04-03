@@ -90,6 +90,7 @@ const INITIAL_DATA = {
   syncControl: {
     lastWorkState: "unknown",
     lastOfficeOutDate: null,
+    lastKnownServerDate: null,
     lastRetryAt: null,
     lastSyncTriggeredAt: null,
     lastSuccessfulSummarySyncAt: null,
@@ -99,7 +100,11 @@ const INITIAL_DATA = {
 };
 
 function formatDateKey(timestamp) {
-  return new Date(timestamp).toISOString().slice(0, 10);
+  const date = new Date(timestamp);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function parseDateKeyToMs(dateKey) {
@@ -615,12 +620,17 @@ class DataStore {
     return {
       lastWorkState: this.data.syncControl?.lastWorkState || "unknown",
       lastOfficeOutDate: this.data.syncControl?.lastOfficeOutDate || null,
+      lastKnownServerDate: this.data.syncControl?.lastKnownServerDate || null,
       lastRetryAt: this.data.syncControl?.lastRetryAt || null,
       lastSyncTriggeredAt: this.data.syncControl?.lastSyncTriggeredAt || null,
       lastSuccessfulSummarySyncAt: this.data.syncControl?.lastSuccessfulSummarySyncAt || null,
       lastWeeklyResetAt: this.data.syncControl?.lastWeeklyResetAt || null,
       lastMonthlyResetAt: this.data.syncControl?.lastMonthlyResetAt || null
     };
+  }
+
+  getDailyDateKeys() {
+    return Object.keys(this.data.daily || {}).sort();
   }
 
   updateSyncControl(patch) {

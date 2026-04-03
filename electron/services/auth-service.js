@@ -88,7 +88,18 @@ class AuthService {
       attendanceStatus: employee.attendance_status || null,
       breakIn: employee.break_in || null,
       breakOut: employee.break_out || null,
-      isOnBreak: employee.is_on_break === true
+      isOnBreak: employee.is_on_break === true,
+      forgotToOut: employee.forgot_to_out === true,
+      attendanceDate: employee.attendance_date || null,
+      serverNow: employee.server_now || null,
+      serverDate: employee.server_date || null,
+      serverTime: employee.server_time || null,
+      erpTimezone: employee.timezone || null,
+      shiftStartTime: employee.shift_start_time || null,
+      shiftEndTime: employee.shift_end_time || null,
+      shiftLateAfter: employee.shift_late_after || null,
+      shiftHalfDayAfter: employee.shift_half_day_after || null,
+      shiftLabel: employee.shift_label || null
     };
   }
 

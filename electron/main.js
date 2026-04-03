@@ -1,5 +1,6 @@
 const path = require("path");
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const { powerMonitor } = require("electron");
 const fs = require("fs");
 const log = require("electron-log");
 const { resolveRendererEntry } = require("./services/config");
@@ -18,6 +19,7 @@ let localApiServer;
 let syncService;
 let authService;
 let authProfileTimer;
+let powerHandlersRegistered = false;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -78,6 +80,7 @@ async function bootstrapServices() {
   localApiServer.start();
   syncService.start();
   startAuthProfileRefreshLoop();
+  registerPowerMonitorHandlers();
 
   log.info("Employee Desktop Tracker started.");
 }
@@ -104,6 +107,45 @@ function startAuthProfileRefreshLoop() {
       // Ignore transient refresh errors; next loop will retry.
     }
   }, 60 * 1000);
+}
+
+function registerPowerMonitorHandlers() {
+  if (powerHandlersRegistered) {
+    return;
+  }
+
+  powerHandlersRegistered = true;
+
+  powerMonitor.on("suspend", async () => {
+    try {
+      if (trackerService?.handleSystemSuspend) {
+        await trackerService.handleSystemSuspend();
+      }
+      await syncService.handleEmployeeStateChange("power_suspend");
+    } catch {
+      // Best effort only; poll/refresh loop still restores state.
+    }
+  });
+
+  powerMonitor.on("resume", async () => {
+    try {
+      if (trackerService?.handleSystemResume) {
+        trackerService.handleSystemResume();
+      }
+
+      const session = authService.getSession();
+      if (session?.isAuthenticated && session?.token) {
+        await authService.refreshEmployeeProfile();
+      }
+
+      await syncService.handleEmployeeStateChange("power_resume");
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("tracker:update");
+      }
+    } catch {
+      // Ignore transient resume refresh errors.
+    }
+  });
 }
 
 function registerIpc() {

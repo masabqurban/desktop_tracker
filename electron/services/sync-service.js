@@ -3,8 +3,14 @@ const fs = require("fs");
 const FormData = require("form-data");
 const { DEFAULTS } = require("./config");
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 function todayDateKey() {
-  const now = new Date();
+  return toLocalDateKey(Date.now());
+}
+
+function toLocalDateKey(timestamp) {
+  const now = new Date(timestamp);
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
@@ -22,6 +28,158 @@ function normalizeDateKey(value) {
   }
 
   return trimmed;
+}
+
+function extractDateKey(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const direct = normalizeDateKey(trimmed);
+  if (direct) {
+    return direct;
+  }
+
+  const match = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? normalizeDateKey(match[1]) : null;
+}
+
+function buildTopApps(appUsageMs, limit = 10) {
+  return Object.entries(appUsageMs || {})
+    .sort((a, b) => (b[1] || 0) - (a[1] || 0))
+    .slice(0, limit)
+    .map(([name, durationMs]) => ({ name, durationMs }));
+}
+
+function aggregateDayEntries(entries) {
+  const summary = {
+    activeMs: 0,
+    idleMs: 0,
+    keyboardCount: 0,
+    mouseCount: 0,
+    appSwitches: 0,
+    browserEvents: 0,
+    desktopEvents: 0,
+    appUsageMs: {}
+  };
+
+  for (const day of entries) {
+    if (!day) {
+      continue;
+    }
+
+    summary.activeMs += day.activeMs || 0;
+    summary.idleMs += day.idleMs || 0;
+    summary.keyboardCount += day.keyboardCount || 0;
+    summary.mouseCount += day.mouseCount || 0;
+    summary.appSwitches += day.appSwitches || 0;
+    summary.browserEvents += day.browserEvents || 0;
+    summary.desktopEvents += day.desktopEvents || 0;
+
+    for (const [appName, durationMs] of Object.entries(day.appUsageMs || {})) {
+      summary.appUsageMs[appName] = (summary.appUsageMs[appName] || 0) + (durationMs || 0);
+    }
+  }
+
+  return summary;
+}
+
+function getEventTimestamp(item) {
+  const raw = item?.event?.timestamp || item?.timestamp || 0;
+  return Number(raw) || 0;
+}
+
+function getDayWindow(dateKey) {
+  const start = new Date(`${dateKey}T00:00:00`).getTime();
+  const end = start + DAY_MS;
+  return { start, end };
+}
+
+function filterEventsByDate(items, dateKey) {
+  const { start, end } = getDayWindow(dateKey);
+  return (items || []).filter((item) => {
+    const timestamp = getEventTimestamp(item);
+    return timestamp >= start && timestamp < end;
+  });
+}
+
+function deriveBrowserContext(browserEvents) {
+  let incognito = 0;
+  let normal = 0;
+
+  for (const wrapper of browserEvents) {
+    const event = wrapper?.event || wrapper;
+    if (event?.isIncognito === true) {
+      incognito += 1;
+    } else if (event?.isIncognito === false) {
+      normal += 1;
+    }
+  }
+
+  return { incognito, normal };
+}
+
+function deriveExtensionRange(browserEvents) {
+  let tabMs = 0;
+  let idleMs = 0;
+  let eventCount = 0;
+  const domainTotals = {};
+
+  for (const wrapper of browserEvents) {
+    eventCount += 1;
+    const event = wrapper?.event || wrapper;
+    if (!event || typeof event !== "object") {
+      continue;
+    }
+
+    if (event.type === "idle") {
+      const idleDuration = Number(event.duration || 0);
+      if (idleDuration > 0) {
+        idleMs += idleDuration;
+      }
+      continue;
+    }
+
+    if (event.type !== "tab") {
+      continue;
+    }
+
+    const duration = Number(event.duration || 0);
+    if (duration <= 0) {
+      continue;
+    }
+
+    tabMs += duration;
+
+    let domain = "unknown";
+    try {
+      domain = new URL(event.url || "").hostname || "unknown";
+    } catch {
+      domain = "unknown";
+    }
+    domainTotals[domain] = (domainTotals[domain] || 0) + duration;
+  }
+
+  const topDomains = Object.entries(domainTotals)
+    .sort((a, b) => (b[1] || 0) - (a[1] || 0))
+    .slice(0, 10)
+    .map(([domain, durationMs]) => ({ domain, durationMs }));
+
+  return {
+    tabMs,
+    idleMs,
+    eventCount,
+    topDomains
+  };
+}
+
+function isDateBefore(left, right) {
+  return typeof left === "string" && typeof right === "string" && left < right;
 }
 
 class SyncService {
@@ -69,16 +227,83 @@ class SyncService {
     return this.resolveWorkState(session) === "working";
   }
 
+  resolveCurrentDateKey(session) {
+    const employee = session?.employee || {};
+
+    return (
+      normalizeDateKey(employee.serverDate) ||
+      extractDateKey(employee.serverNow) ||
+      normalizeDateKey(employee.attendanceDate) ||
+      todayDateKey()
+    );
+  }
+
+  hasMeaningfulDayData(snapshot, dateKey) {
+    const day = snapshot?.daily?.[dateKey];
+    if (!day) {
+      return false;
+    }
+
+    const hasTotals =
+      (day.activeMs || 0) > 0 ||
+      (day.idleMs || 0) > 0 ||
+      (day.keyboardCount || 0) > 0 ||
+      (day.mouseCount || 0) > 0 ||
+      (day.appSwitches || 0) > 0 ||
+      (day.browserEvents || 0) > 0 ||
+      (day.desktopEvents || 0) > 0 ||
+      Object.keys(day.appUsageMs || {}).length > 0;
+
+    if (hasTotals) {
+      return true;
+    }
+
+    const dayDesktopEvents = filterEventsByDate(snapshot?.events || [], dateKey);
+    const dayBrowserEvents = filterEventsByDate(snapshot?.browserEvents || [], dateKey);
+    const dayScreenshots = filterEventsByDate(snapshot?.screenshots || [], dateKey);
+
+    return dayDesktopEvents.length > 0 || dayBrowserEvents.length > 0 || dayScreenshots.length > 0;
+  }
+
+  queueHistoricalSummaries(currentDateKey, reason = "date_rollover") {
+    const snapshot = this.dataStore.getSnapshot();
+    const dateKeys = Object.keys(snapshot.daily || {}).sort();
+    const queuedDates = [];
+
+    for (const dateKey of dateKeys) {
+      if (!isDateBefore(dateKey, currentDateKey)) {
+        continue;
+      }
+
+      if (!this.hasMeaningfulDayData(snapshot, dateKey)) {
+        continue;
+      }
+
+      const result = this.queueDailySummarySnapshot(`${reason}:${dateKey}`, dateKey);
+      if (result?.ok) {
+        queuedDates.push(dateKey);
+      }
+    }
+
+    return queuedDates;
+  }
+
   async handleEmployeeStateChange(trigger = "profile_update") {
     const session = this.dataStore.getAuthSession();
     const currentState = this.resolveWorkState(session);
+    const currentDateKey = this.resolveCurrentDateKey(session);
     const control = this.dataStore.getSyncControl();
     const previousState = control.lastWorkState || "unknown";
-    const hasPending = this.dataStore.hasPendingSyncQueue();
     const now = Date.now();
 
+    const historicalQueuedDates = this.queueHistoricalSummaries(
+      currentDateKey,
+      `auto_close:${trigger}`
+    );
+    const hasPending = this.dataStore.hasPendingSyncQueue();
+
     if (currentState === "office_out" && previousState !== "office_out") {
-      const officeOutDate = todayDateKey();
+      const officeOutDate = currentDateKey;
       const alreadyHandled =
         control.lastOfficeOutDate === officeOutDate && !hasPending;
 
@@ -88,6 +313,7 @@ class SyncService {
         this.dataStore.updateSyncControl({
           lastWorkState: currentState,
           lastOfficeOutDate: officeOutDate,
+          lastKnownServerDate: currentDateKey,
           lastSyncTriggeredAt: now
         });
         this.dataStore.persist();
@@ -101,10 +327,11 @@ class SyncService {
       }
     }
 
-    if (currentState === "working" && previousState !== "working" && hasPending) {
+    if (currentState === "working" && hasPending) {
       const syncResult = await this.flushQueue();
       this.dataStore.updateSyncControl({
         lastWorkState: currentState,
+        lastKnownServerDate: currentDateKey,
         lastRetryAt: now,
         lastSyncTriggeredAt: now
       });
@@ -118,8 +345,24 @@ class SyncService {
       };
     }
 
+    if (historicalQueuedDates.length > 0) {
+      this.dataStore.updateSyncControl({
+        lastWorkState: currentState,
+        lastKnownServerDate: currentDateKey
+      });
+      this.dataStore.persist();
+
+      return {
+        ok: true,
+        state: currentState,
+        action: "queued_historical",
+        queuedDates: historicalQueuedDates
+      };
+    }
+
     this.dataStore.updateSyncControl({
-      lastWorkState: currentState
+      lastWorkState: currentState,
+      lastKnownServerDate: currentDateKey
     });
     this.dataStore.persist();
 
@@ -140,7 +383,7 @@ class SyncService {
       return { ok: false, reason: "not_authenticated" };
     }
 
-    const dateKey = normalizeDateKey(activityDate) || todayDateKey();
+    const dateKey = normalizeDateKey(activityDate) || this.resolveCurrentDateKey(authSession);
     const employeeId = authSession.employee?.id || "unknown";
 
     const payload = {
@@ -169,71 +412,109 @@ class SyncService {
   }
 
   buildDailySummaryPayload(reason, activityDate) {
-    const dashboard = this.getDashboardPayload?.() || {};
-    const periods = dashboard.periods || {};
-    const extensionData = dashboard.extensionData || {};
+    const snapshot = this.dataStore.getSnapshot();
+    const authSession = this.dataStore.getAuthSession();
+    const employee = authSession?.employee || null;
+    const dailyMap = snapshot.daily || {};
+    const day = dailyMap[activityDate] || {
+      activeMs: 0,
+      idleMs: 0,
+      keyboardCount: 0,
+      mouseCount: 0,
+      appSwitches: 0,
+      browserEvents: 0,
+      desktopEvents: 0,
+      appUsageMs: {}
+    };
 
-    const pickPeriod = (period) => ({
-      activeMs: period?.activeMs || 0,
-      idleMs: period?.idleMs || 0,
-      keyboardCount: period?.keyboardCount || 0,
-      mouseCount: period?.mouseCount || 0,
-      appSwitches: period?.appSwitches || 0,
-      browserEvents: period?.browserEvents || 0,
-      desktopEvents: period?.desktopEvents || 0,
-      topApps: Array.isArray(period?.topApps) ? period.topApps.slice(0, 10) : []
-    });
+    const allDateKeys = Object.keys(dailyMap)
+      .filter((key) => normalizeDateKey(key) && key <= activityDate)
+      .sort();
 
-    const pickExtensionRange = (range) => ({
-      tabMs: range?.tabMs || 0,
-      idleMs: range?.idleMs || 0,
-      eventCount: range?.eventCount || 0,
-      topDomains: Array.isArray(range?.topDomains) ? range.topDomains.slice(0, 10) : []
-    });
+    const weeklyEntries = allDateKeys.slice(-7).map((key) => dailyMap[key]);
+    const monthlyEntries = allDateKeys.slice(-30).map((key) => dailyMap[key]);
+
+    const dailyPeriod = {
+      ...day,
+      topApps: buildTopApps(day.appUsageMs, 10)
+    };
+
+    const weeklyPeriodRaw = aggregateDayEntries(weeklyEntries);
+    const weeklyPeriod = {
+      ...weeklyPeriodRaw,
+      topApps: buildTopApps(weeklyPeriodRaw.appUsageMs, 10)
+    };
+
+    const monthlyPeriodRaw = aggregateDayEntries(monthlyEntries);
+    const monthlyPeriod = {
+      ...monthlyPeriodRaw,
+      topApps: buildTopApps(monthlyPeriodRaw.appUsageMs, 10)
+    };
+
+    const dayBrowserEvents = filterEventsByDate(snapshot.browserEvents || [], activityDate);
+    const extensionDaily = deriveExtensionRange(dayBrowserEvents);
+
+    const dayDesktopEvents = filterEventsByDate(snapshot.events || [], activityDate);
+    const dayScreenshots = filterEventsByDate(snapshot.screenshots || [], activityDate)
+      .slice(-20)
+      .reverse();
+
+    const browserContext = deriveBrowserContext(dayBrowserEvents);
+    const totalTrackedMs = (day.activeMs || 0) + (day.idleMs || 0);
+    const extensionProductivity = extensionDaily.tabMs + extensionDaily.idleMs > 0
+      ? Math.round((extensionDaily.tabMs / (extensionDaily.tabMs + extensionDaily.idleMs)) * 100)
+      : 0;
 
     return {
       activityDate,
       reason,
       generatedAt: Date.now(),
       employee: {
-        id: dashboard?.auth?.employee?.id || null,
-        name: dashboard?.auth?.employee?.name || null,
-        email: dashboard?.auth?.employee?.email || null,
-        designation: dashboard?.auth?.employee?.designation || null
+        id: employee?.id || null,
+        name: employee?.name || null,
+        email: employee?.email || null,
+        designation: employee?.designation || null,
+        shiftLabel: employee?.shiftLabel || null,
+        shiftStartTime: employee?.shiftStartTime || null,
+        shiftEndTime: employee?.shiftEndTime || null,
+        attendanceDate: employee?.attendanceDate || null,
+        forgotToOut: employee?.forgotToOut === true
       },
       totals: {
-        totalTrackedMs: dashboard?.totals?.totalTrackedMs || 0,
-        totalIdleMs: dashboard?.totals?.totalIdleMs || 0,
-        totalKeyboard: dashboard?.totals?.totalKeyboard || 0,
-        totalMouse: dashboard?.totals?.totalMouse || 0
+        totalTrackedMs,
+        totalIdleMs: day?.idleMs || 0,
+        totalKeyboard: day?.keyboardCount || 0,
+        totalMouse: day?.mouseCount || 0
       },
       periods: {
-        daily: pickPeriod(periods.daily),
-        weekly: pickPeriod(periods.weekly),
-        monthly: pickPeriod(periods.monthly)
+        daily: dailyPeriod,
+        weekly: weeklyPeriod,
+        monthly: monthlyPeriod
       },
-      openedApps: dashboard?.openedApps || 0,
-      browserContext: dashboard?.browserContext || { incognito: 0, normal: 0 },
-      installedBrowsers: dashboard?.installedBrowsers || {},
-      browserStatus: dashboard?.browserStatus || {},
-      extensionStatus: dashboard?.extensionStatus || {},
+      openedApps: Object.keys(day?.appUsageMs || {}).length,
+      browserContext,
+      installedBrowsers: snapshot?.installedBrowsers || {},
+      browserStatus: snapshot?.browserStatus || {},
+      extensionStatus: snapshot?.extensionStatus || {},
       extensionData: {
-        totalTabMs: extensionData.totalTabMs || 0,
-        totalIdleMs: extensionData.totalIdleMs || 0,
-        productivity: extensionData.productivity || 0,
-        topDomains: Array.isArray(extensionData.topDomains)
-          ? extensionData.topDomains.slice(0, 10)
-          : [],
-        daily: pickExtensionRange(extensionData.daily),
-        weekly: pickExtensionRange(extensionData.weekly),
-        monthly: pickExtensionRange(extensionData.monthly)
+        totalTabMs: extensionDaily.tabMs,
+        totalIdleMs: extensionDaily.idleMs,
+        productivity: extensionProductivity,
+        topDomains: extensionDaily.topDomains,
+        daily: extensionDaily,
+        weekly: extensionDaily,
+        monthly: extensionDaily
       },
-      mostUsedApps: Array.isArray(dashboard?.mostUsedApps)
-        ? dashboard.mostUsedApps.slice(0, 15)
-        : [],
-      dailyBreakdown: Array.isArray(dashboard?.dailyBreakdown)
-        ? dashboard.dailyBreakdown.slice(-30)
-        : []
+      mostUsedApps: buildTopApps(day?.appUsageMs || {}, 15),
+      screenshots: dayScreenshots,
+      desktopEvents: dayDesktopEvents,
+      browserEvents: dayBrowserEvents,
+      dailyBreakdown: [
+        {
+          date: activityDate,
+          ...day
+        }
+      ]
     };
   }
 
