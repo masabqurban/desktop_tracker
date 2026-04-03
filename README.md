@@ -117,3 +117,6 @@ Electron supports all three target OS platforms.
 2. `POST /api/browser-activity`
 
 Store the payloads in MySQL and aggregate in Laravel for ERP dashboards.
+
+
+npx electron-builder --win nsis --x64

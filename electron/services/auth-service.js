@@ -1,4 +1,5 @@
 const axios = require("axios");
+const os = require("os");
 
 class AuthService {
   constructor({ dataStore, erpBaseUrl }) {
@@ -8,10 +9,12 @@ class AuthService {
 
   async login({ email, password }) {
     const endpoint = `${this.erpBaseUrl}/api/admin/login`;
+    const host = (os.hostname() || "desktop").toLowerCase().replace(/[^a-z0-9_-]/g, "-");
     const response = await axios.post(endpoint, {
       email,
       password,
-      user_type: "Employee"
+      user_type: "Employee",
+      device_name: `desktop-${host}`
     }, {
       timeout: 15000
     });
