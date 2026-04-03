@@ -114,19 +114,9 @@ function App() {
       loadDashboard();
     }, 15000);
 
-    // Refresh employee profile every 5 minutes to keep office hours updated
-    const profileRefreshTimer = setInterval(async () => {
-      const session = await window.trackerApi.getSession();
-      if (session?.isAuthenticated) {
-        await window.trackerApi.refreshSession();
-        await loadDashboard();
-      }
-    }, 5 * 60 * 1000);
-
     return () => {
       unsubscribe();
       clearInterval(dashboardTimer);
-      clearInterval(profileRefreshTimer);
     };
   }, []);
 

@@ -4,8 +4,8 @@ const os = require("os");
 const { powerMonitor, desktopCapturer, screen } = require("electron");
 const { DEFAULTS } = require("./config");
 
-const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
-const IDLE_SCREENSHOT_INTERVAL_MS = 7 * 60 * 1000;
+const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+const IDLE_SCREENSHOT_INTERVAL_MS = 15 * 60 * 1000;
 const MAX_TRACKABLE_GAP_MS = Math.max((DEFAULTS.pollIntervalMs || 10000) * 3, 2 * 60 * 1000);
 const SHIFT_OVERRUN_GRACE_SECONDS = 2 * 60 * 60;
 
@@ -184,7 +184,7 @@ class TrackerService {
         type: "idle_screenshot",
         screenshotPath: filepath,
         timestamp,
-        idleMinutes: 7,
+        idleMinutes: Math.round(idleCaptureMs / (60 * 1000)),
         displayId: sourceDisplayId,
         isActiveDisplay: String(sourceDisplayId) === activeId,
         resolution: `${imageSize.width}x${imageSize.height}`,
@@ -426,7 +426,7 @@ class TrackerService {
       });
     }
 
-    // Capture screenshot every 7 minutes while continuously idle.
+    // Capture screenshot every 15 minutes while continuously idle.
     if (this.idle && this.idleStartTime && (now - this.idleStartTime >= IDLE_SCREENSHOT_INTERVAL_MS)) {
       await this.captureIdleScreenshot(now);
       this.idleStartTime = now;

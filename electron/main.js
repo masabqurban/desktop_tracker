@@ -18,8 +18,9 @@ let trackerService;
 let localApiServer;
 let syncService;
 let authService;
-let authProfileTimer;
 let powerHandlersRegistered = false;
+let lastTrackerIdle = false;
+let idleProfileRefreshInFlight = false;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -69,7 +70,15 @@ async function bootstrapServices() {
 
   trackerService = new TrackerService({
     dataStore,
-    onUpdate: () => {
+    onUpdate: async (update) => {
+      const currentlyIdle = Boolean(update?.idle);
+      const idleStarted = currentlyIdle && !lastTrackerIdle;
+      lastTrackerIdle = currentlyIdle;
+
+      if (idleStarted) {
+        await refreshAuthProfileOnIdleStart();
+      }
+
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("tracker:update");
       }
@@ -79,34 +88,34 @@ async function bootstrapServices() {
   await trackerService.start();
   localApiServer.start();
   syncService.start();
-  startAuthProfileRefreshLoop();
   registerPowerMonitorHandlers();
 
   log.info("Employee Desktop Tracker started.");
 }
 
-function startAuthProfileRefreshLoop() {
-  if (authProfileTimer) {
-    clearInterval(authProfileTimer);
+async function refreshAuthProfileOnIdleStart() {
+  if (idleProfileRefreshInFlight) {
+    return;
   }
 
-  authProfileTimer = setInterval(async () => {
-    try {
-      const session = authService.getSession();
-      if (!session?.isAuthenticated || !session?.token) {
-        await syncService.handleEmployeeStateChange("background_no_session");
-        return;
-      }
-
-      await authService.refreshEmployeeProfile();
-      await syncService.handleEmployeeStateChange("background_profile_refresh");
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("tracker:update");
-      }
-    } catch {
-      // Ignore transient refresh errors; next loop will retry.
+  idleProfileRefreshInFlight = true;
+  try {
+    const session = authService.getSession();
+    if (!session?.isAuthenticated || !session?.token) {
+      await syncService.handleEmployeeStateChange("idle_start_no_session");
+      return;
     }
-  }, 60 * 1000);
+
+    await authService.refreshEmployeeProfile();
+    await syncService.handleEmployeeStateChange("idle_start_profile_refresh");
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("tracker:update");
+    }
+  } catch {
+    // Ignore transient refresh errors; next idle-start transition will retry.
+  } finally {
+    idleProfileRefreshInFlight = false;
+  }
 }
 
 function registerPowerMonitorHandlers() {
@@ -247,11 +256,6 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", async () => {
-  if (authProfileTimer) {
-    clearInterval(authProfileTimer);
-    authProfileTimer = null;
-  }
-
   if (syncService) {
     syncService.stop();
   }
