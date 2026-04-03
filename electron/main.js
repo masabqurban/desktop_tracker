@@ -20,7 +20,7 @@ let syncService;
 let authService;
 let powerHandlersRegistered = false;
 let lastTrackerIdle = false;
-let idleProfileRefreshInFlight = false;
+let profileRefreshInFlight = false;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -76,7 +76,7 @@ async function bootstrapServices() {
       lastTrackerIdle = currentlyIdle;
 
       if (idleStarted) {
-        await refreshAuthProfileOnIdleStart();
+        await refreshAuthProfileForStateCheck("idle_start");
       }
 
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -93,28 +93,28 @@ async function bootstrapServices() {
   log.info("Employee Desktop Tracker started.");
 }
 
-async function refreshAuthProfileOnIdleStart() {
-  if (idleProfileRefreshInFlight) {
+async function refreshAuthProfileForStateCheck(triggerReason) {
+  if (profileRefreshInFlight) {
     return;
   }
 
-  idleProfileRefreshInFlight = true;
+  profileRefreshInFlight = true;
   try {
     const session = authService.getSession();
     if (!session?.isAuthenticated || !session?.token) {
-      await syncService.handleEmployeeStateChange("idle_start_no_session");
+      await syncService.handleEmployeeStateChange(`${triggerReason}_no_session`);
       return;
     }
 
     await authService.refreshEmployeeProfile();
-    await syncService.handleEmployeeStateChange("idle_start_profile_refresh");
+    await syncService.handleEmployeeStateChange(`${triggerReason}_profile_refresh`);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("tracker:update");
     }
   } catch {
-    // Ignore transient refresh errors; next idle-start transition will retry.
+    // Ignore transient refresh errors; next trigger will retry.
   } finally {
-    idleProfileRefreshInFlight = false;
+    profileRefreshInFlight = false;
   }
 }
 
@@ -153,6 +153,22 @@ function registerPowerMonitorHandlers() {
       }
     } catch {
       // Ignore transient resume refresh errors.
+    }
+  });
+
+  powerMonitor.on("lock-screen", async () => {
+    try {
+      await refreshAuthProfileForStateCheck("lock_screen");
+    } catch {
+      // Ignore transient lock-screen refresh errors.
+    }
+  });
+
+  powerMonitor.on("unlock-screen", async () => {
+    try {
+      await refreshAuthProfileForStateCheck("unlock_screen");
+    } catch {
+      // Ignore transient unlock-screen refresh errors.
     }
   });
 }
